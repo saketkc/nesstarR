@@ -1,0 +1,18 @@
+Package: nesstarR
+Type: Package
+Title: Read and Export NESSTAR Binary Containers
+Version: 0.1.0
+Authors@R: person("Saket", "Choudhary", email = "saketkc@gmail.com",
+    role = c("aut", "cre"), comment = c(ORCID = "0000-0001-5202-7633"))
+Description: Reads .Nesstar binary containers distributed by agencies doing statistical 
+    surveys (e.g. MOSPI India). Decodes compact binary and string columns into
+    R data frames and exports datasets to CSV.
+License: MIT + file LICENSE
+Encoding: UTF-8
+RoxygenNote: 7.3.3
+Imports:
+    tools
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+NeedsCompilation: yes
