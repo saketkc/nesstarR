@@ -138,7 +138,7 @@ static int is_plausible_name(const char *s) {
     for (int i = 1; s[i]; i++) {
         char c = s[i];
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') || c == '_')) return 0;
+              (c >= '0' && c <= '9') || c == '_' || c == '.')) return 0;
         if (i > 40) return 0;
     }
     return 1;
