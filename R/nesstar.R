@@ -194,7 +194,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   names(cols) <- vapply(vars, `[[`, character(1), "name")
   for (i in seq_along(vars)) {
     v <- vars[[i]]
-    if (v$data_length == 0) {
+    if (v$data_length == 0 || !v$mode_code %in% c(1L, 5L)) {
       cols[[i]] <- if (v$mode_code == 1L) character(nrow) else rep(NA_real_, nrow)
       next
     }
@@ -218,7 +218,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   cols <- vector("list", length(vars))
   for (i in seq_along(vars)) {
     v <- vars[[i]]
-    if (v$data_length == 0) {
+    if (v$data_length == 0 || !v$mode_code %in% c(1L, 5L)) {
       cols[[i]] <- if (v$mode_code == 1L) character(n_rows) else rep(NA_real_, n_rows)
       next
     }

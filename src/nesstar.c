@@ -73,11 +73,12 @@ static char *utf16le_to_utf8(const uint8_t *src, size_t byte_len) {
 
 /* Returns 1 for little-endian, 0 for big-endian. */
 static int detect_byte_order(const uint8_t *data, size_t len) {
-    if (len < 0x29) return 1;
-    uint32_t le = u32le(data, 0x25);
-    if (le + 4 <= (uint32_t)len) return 1;
+    if (len < 0x2A) return 1;
+    /* Resource index offset is stored as 5-byte LE at 0x25..0x29. */
+    uint64_t le = (uint64_t)u32le(data, 0x25) | ((uint64_t)data[0x29] << 32);
+    if (le + 4 <= len) return 1;
     uint32_t be = u32be(data, 0x25);
-    if (be + 4 <= (uint32_t)len) return 0;
+    if ((size_t)be + 4 <= len) return 0;
     return 1;
 }
 
@@ -94,7 +95,7 @@ static uint16_t read_u16(const uint8_t *d, size_t off, int little_endian) {
 
 typedef struct {
     uint32_t record_id;
-    uint32_t target_offset;
+    uint64_t target_offset;  /* 5-byte LE in file; promoted to 64-bit */
     uint32_t length;
 } ResRecord;
 
@@ -105,9 +106,15 @@ typedef struct {
 
 static ResIndex parse_resource_index(const uint8_t *data, size_t len, int le) {
     ResIndex idx = {NULL, 0};
-    if (len < 0x29) return idx;
-    uint32_t off = read_u32(data, 0x25, le);
-    if ((size_t)off + 4 > len) return idx;
+    if (len < 0x2A) return idx;
+    /* Offset is stored as 5-byte LE (bytes 0x25..0x29); BE files use 4-byte. */
+    size_t off;
+    if (le) {
+        off = (size_t)((uint64_t)u32le(data, 0x25) | ((uint64_t)data[0x29] << 32));
+    } else {
+        off = (size_t)u32be(data, 0x25);
+    }
+    if (off + 4 > len) return idx;
     uint32_t count = read_u32(data, off, le);
     if (count == 0 || count > MAX_RESOURCES) return idx;
     size_t end = (size_t)off + 4 + (size_t)count * 15;
@@ -116,7 +123,9 @@ static ResIndex parse_resource_index(const uint8_t *data, size_t len, int le) {
     size_t cur = off + 4;
     for (uint32_t i = 0; i < count; i++) {
         recs[i].record_id     = read_u32(data, cur,    le);
-        recs[i].target_offset = read_u32(data, cur+4,  le);
+        /* target_offset: 4-byte base at +4, high byte at +8 (5-byte LE u40). */
+        recs[i].target_offset = (uint64_t)read_u32(data, cur+4, le)
+                              | ((uint64_t)data[cur+8] << 32);
         recs[i].length        = read_u32(data, cur+10, le);
         cur += 15;
     }
@@ -183,8 +192,8 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
     if (rec_sz < 26)
         error("Descriptor record size %u too small", rec_sz);
 
-    uint32_t desc_off = base_rec->target_offset;
-    if ((size_t)desc_off + (size_t)ds_count * rec_sz > len)
+    size_t desc_off = (size_t)base_rec->target_offset;
+    if (desc_off + (size_t)ds_count * rec_sz > len)
         error("Descriptor table extends beyond end of file");
 
     SEXP datasets = PROTECT(allocVector(VECSXP, ds_count));
@@ -209,8 +218,8 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
         if (entry_sz < 160)
             error("Dataset %u: variable_directory_entry_size %u too small", ds_num, entry_sz);
 
-        uint32_t dir_off = dir_rec->target_offset;
-        if ((size_t)dir_off + (size_t)var_count * entry_sz > len)
+        size_t dir_off = (size_t)dir_rec->target_offset;
+        if (dir_off + (size_t)var_count * entry_sz > len)
             error("Dataset %u: variable directory extends beyond file", ds_num);
 
         SEXP variables = PROTECT(allocVector(VECSXP, (int)var_count));
@@ -238,7 +247,7 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
 
             /* Look up data offset/length in resource index */
             ResRecord *var_rec = find_record(&idx, var_id);
-            uint32_t data_offset = var_rec ? var_rec->target_offset : 0;
+            uint64_t data_offset = var_rec ? var_rec->target_offset : 0;
             uint32_t data_length = var_rec ? var_rec->length        : 0;
 
             SEXP var_list = PROTECT(mkNamed(VECSXP, var_names));
