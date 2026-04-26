@@ -1,0 +1,326 @@
+---
+title: "Reading NESSTAR survey data with nesstarR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Reading NESSTAR survey data with nesstarR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+
+mospi_data <- {
+  env <- Sys.getenv("MOSPI_DATA", unset = "")
+  if (nzchar(env)) {
+    normalizePath(env, mustWork = FALSE)
+  } else {
+    # Sibling-repo default: nesstarR/ and mospiR/ sit next to each other
+    normalizePath(file.path("..", "..", "mospiR", "data", "hces"),
+                  mustWork = FALSE)
+  }
+}
+
+nesstar_path <- file.path(
+  mospi_data,
+  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012",
+  "Nss68_1.0_Type2_new format",
+  "survey0", "data",
+  "nss68_consumer_expenditure_type2.Nesstar"
+)
+
+stata_zip <- normalizePath(
+  file.path("..", "stata", "Nss68_STATA_2012.zip"),
+  mustWork = FALSE
+)
+```
+
+[NSS rounds 64, 66, and 68](https://microdata.gov.in/NADA/index.php/catalog/?page=1&sort_order=desc&ps=15) come as `.Nesstar` binaries inside `.rar` archives.
+Download them with the sister package [mospiR](https://github.com/saketkc/mospiR), extract with
+`unar`, and read with nesstarR. All examples below use NSS 68th Round Type 2
+(Consumer Expenditure Survey, July 2011 - June 2012); the same steps apply to
+NSS 64 and 66.
+
+## Prerequisites
+
+```{r install, eval=FALSE}
+remotes::install_github("saketkc/mospiR")
+remotes::install_github("saketkc/nesstarR")
+```
+
+```{r libs}
+library(mospiR)
+library(nesstarR)
+```
+
+## Download from the portal
+
+`mospiR::download_dataset()` authenticates with the MoSPI NADA API and
+downloads the full archive for one survey idno. The API key is read from
+`MOSPI_KEY` (set it in `~/.Renviron`).
+
+```{r download, eval=FALSE}
+api_key  <- Sys.getenv("MOSPI_KEY")
+data_dir <- file.path("data", "hces",
+                      "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012")
+
+download_dataset(
+  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012",
+  data_dir,
+  api_key
+)
+```
+
+The download is a `.rar` archive, around 270 MB for NSS 68 T2.
+
+## Extract the archive
+
+`unar` (macOS/Linux) and `unrar` (Windows) both work. Either must be on your
+`PATH`.
+
+```{r extract, eval=FALSE}
+rar_file <- file.path(data_dir, "Nss68_1.0_Type2_new format.rar")
+system2("unar", c("-o", dirname(rar_file), shQuote(rar_file)))
+```
+
+Extraction produces a folder containing:
+
+- `survey0/data/nss68_consumer_expenditure_type2.Nesstar` (the binary data)
+- `ddi.xml` (variable metadata in DDI format, not required by nesstarR)
+- `Readme.pdf` / supporting documents
+
+## Parse the Nesstar file
+
+`nesstar_parse()` reads the entire file into memory and decodes the binary
+header, resource index, dataset descriptors, and variable directories. No row
+data is loaded at this stage.
+
+```{r parse}
+nb <- nesstar_parse(nesstar_path)
+nb
+```
+
+## Dataset structure
+
+A single `.Nesstar` container holds multiple datasets, one per schedule
+block (household, person, food, non-food, …).
+
+```{r datasets}
+nesstar_datasets(nb)
+```
+
+The dataset with the largest row count is the food block: one row per
+household × item combination (~4-5 million rows for NSS 68 T2).
+
+```{r food_ds}
+ds_tbl <- nesstar_datasets(nb)
+food_ds <- ds_tbl$dataset_number[which.max(ds_tbl$row_count)]
+cat("Food block dataset number:", food_ds, "\n")
+cat("Rows:", ds_tbl$row_count[ds_tbl$dataset_number == food_ds], "\n")
+```
+
+## Variable listing
+
+```{r variables}
+vars <- nesstar_variables(nb, dataset_number = food_ds)
+vars[, c("name", "mode_code", "value_format_code", "width_value")]
+```
+
+## Embedded labels and category codes
+
+NESSTAR files from NSS 64 onwards embed Huffman-compressed XML blocks with
+variable labels and category codes.
+
+```{r metadata}
+meta <- nesstar_metadata(nb)
+if (!is.null(meta)) {
+  ds_meta <- meta$datasets[[which(
+    vapply(meta$datasets, `[[`, integer(1), "dataset_number") == food_ds
+  )]]
+  cat("File name stored in container:", ds_meta$file_name, "\n\n")
+
+  for (v in head(ds_meta$variables, 6)) {
+    cat(sprintf("%-20s  label: %s\n", v$name, v$label))
+    if (length(v$categories) > 0) {
+      for (cat_entry in head(v$categories, 4)) {
+        cat(sprintf("  %s = %s\n", cat_entry$value, cat_entry$label))
+      }
+    }
+  }
+} else {
+  message("Metadata not available for this file (older NSS format).")
+}
+```
+
+
+## Read a dataset
+
+`nesstar_read_dataset()` decodes all columns for the requested dataset.
+For the food block this is the slow step (~10-30 s on a laptop): 4–5 million
+rows × ~20 columns, decoded from the packed binary format.
+
+Pass `columns` to load only what you need:
+
+```{r read}
+food <- nesstar_read_dataset(
+  nb,
+  dataset_number = food_ds,
+  columns = c("HHID", "State_code", "District_Code", "Sector",
+              "Combined_Multiplier", "Item_Code", "Total_Consumption_Value")
+)
+cat("Rows:", nrow(food), "| Columns:", ncol(food), "\n")
+head(food)
+```
+
+## Quick check: cereal spending by sector
+
+Weighted mean monthly household expenditure on cereals (item codes 101–140),
+rural vs. urban. The `Multiplier` column is the survey weight.
+
+```{r cereals}
+cereals    <- food[as.integer(food$Item_Code) >= 101 &
+                   as.integer(food$Item_Code) <= 140, ]
+hh_cereals <- aggregate(Total_Consumption_Value ~ HHID + Sector + Combined_Multiplier,
+                        data = cereals, FUN = sum)
+
+rural <- hh_cereals[hh_cereals$Sector == "1", ]
+urban <- hh_cereals[hh_cereals$Sector == "2", ]
+
+cat(sprintf(
+  "Weighted mean cereal expenditure (Rs/month):\n  Rural: %.0f\n  Urban: %.0f\n",
+  weighted.mean(rural$Total_Consumption_Value, rural$Combined_Multiplier, na.rm = TRUE),
+  weighted.mean(urban$Total_Consumption_Value, urban$Combined_Multiplier, na.rm = TRUE)
+))
+```
+
+## Export to csv
+
+`nesstar_export()` writes one CSV (or `.csv.gz`) per dataset to a directory.
+It processes 50,000 rows per chunk by default, so even the 4.65 GB T1 file
+does not require loading all rows at once.
+
+```{r export}
+output_dir <- file.path(tempdir(), "nss68t2")
+nesstar_export(nb, output_dir = output_dir, compress = FALSE)
+list.files(output_dir)
+```
+
+Pass `compress = TRUE` (the default) for gzip-compressed output, which
+typically halves file size with negligible extra time.
+
+```{r export_subset, eval=FALSE}
+nesstar_export(nb,
+               output_dir = output_dir,
+               datasets   = food_ds,
+               compress   = TRUE,
+               chunk_size = 100000L)
+```
+
+## Verify against Stata reference files
+
+For this, I took help of a colleague to install Nesstar.exe and asked them to convert the binary to stata file. 
+The code below checks that nesstarR's CSV output matches it.
+
+### Unzip the Stata archive
+
+```{r stata_unzip}
+stata_dir <- file.path(tempdir(), "stata_68t2")
+unzip(stata_zip, exdir = stata_dir)
+dta_files <- sort(list.files(stata_dir, pattern = "\\.dta$",
+                              full.names = TRUE, recursive = TRUE))
+cat(length(dta_files), "Stata files found\n")
+```
+
+### Match datasets by column set
+
+The Stata archive labels each file "Level N". nesstarR names output files
+`_dsNN`. We read only column schemas from the Stata files (`n_max = 0` loads
+the header without row data) and match each level to a CSV by its normalised
+column name set, which is unique across all 11 datasets.
+
+```{r stata_match}
+library(haven)
+
+# n_max = 0: read header only, no row data loaded
+stata_meta <- lapply(dta_files, function(f) {
+  df <- read_dta(f, n_max = 0L)
+  list(
+    path  = f,
+    level = as.integer(sub(".*[Ll]evel[_\\s-]*(\\d+).*", "\\1",
+                           basename(f), perl = TRUE)),
+    ncol  = ncol(df),
+    cols  = names(df)
+  )
+})
+
+csv_files <- sort(list.files(output_dir, pattern = "_ds\\d+\\.csv$",
+                              full.names = TRUE))
+csv_meta <- lapply(csv_files, function(f) {
+  hdr    <- names(read.csv(f, nrows = 0L, check.names = FALSE))
+  ds_num <- as.integer(sub(".*_ds(\\d+)\\.csv$", "\\1", basename(f)))
+  list(path = f, ds_num = ds_num, cols = hdr)
+})
+
+# STATA converts '.' in column names to '_'; normalise before comparing
+norm_names <- function(x) toupper(gsub("\\.", "_", trimws(x)))
+
+for (sm in stata_meta) {
+  sn <- norm_names(sm$cols)
+  cm <- Filter(function(x) setequal(norm_names(x$cols), sn), csv_meta)
+  if (length(cm) == 0L) {
+    cat(sprintf("Level %2d  cols=%d  -> NO MATCH\n", sm$level, sm$ncol))
+    next
+  }
+  cat(sprintf("Level %2d -> ds%02d  cols=%d  cols_match=TRUE\n",
+              sm$level, cm[[1L]]$ds_num, sm$ncol))
+}
+```
+
+Expected output: every Stata level maps to exactly one nesstarR CSV dataset.
+
+### Spot-check numeric values
+
+Compare the first 500 rows of each matched dataset cell by cell. Any
+difference beyond floating-point epsilon (`1e-9`) is flagged.
+
+```{r stata_values}
+SPOT_ROWS <- 500L
+
+for (sm in stata_meta) {
+  sn <- norm_names(sm$cols)
+  cm <- Filter(function(x) setequal(norm_names(x$cols), sn), csv_meta)
+  if (length(cm) == 0L) next
+  cm <- cm[[1L]]
+
+  s_df <- read_dta(sm$path, n_max = SPOT_ROWS)
+  c_df <- read.csv(cm$path, nrows = SPOT_ROWS, check.names = FALSE)
+
+  s_norm <- norm_names(names(s_df))
+  c_norm <- norm_names(names(c_df))
+  common <- intersect(s_norm, c_norm)
+
+  mismatches <- 0L
+  for (col in common) {
+    sv <- suppressWarnings(as.numeric(as.character(
+            s_df[[which(s_norm == col)[1L]]])))
+    cv <- suppressWarnings(as.numeric(as.character(
+            c_df[[which(c_norm == col)[1L]]])))
+    if (!all(is.na(sv)) && !all(is.na(cv))) {
+      mismatches <- mismatches +
+        sum(abs(sv - cv) > 1e-9, na.rm = TRUE) +
+        sum(is.na(sv) & !is.na(cv)) +
+        sum(!is.na(sv) & is.na(cv))
+    } else {
+      mismatches <- mismatches +
+        sum(trimws(as.character(sv)) != trimws(as.character(cv)), na.rm = TRUE)
+    }
+  }
+
+  cat(sprintf(
+    "Level %2d / ds%02d: %d cols x %d rows - %s\n",
+    sm$level, cm$ds_num, length(common), SPOT_ROWS,
+    if (mismatches == 0L) "all values match" else paste(mismatches, "MISMATCHES")
+  ))
+}
+```
+

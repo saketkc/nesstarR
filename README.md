@@ -33,7 +33,7 @@ df_subset <- nesstar_read_dataset(x, dataset_number = 1, columns = c("AGE", "DIS
 
 ## Metadata
 
-NESSTAR files embed Huffman-compressed XML with human-readable labels and category codes for each variable:
+NESSTAR files embed Huffman-compressed XML with variable labels and category codes:
 
 ```r
 meta <- nesstar_metadata(x)

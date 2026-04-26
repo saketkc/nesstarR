@@ -13,6 +13,11 @@ RoxygenNote: 7.3.3
 Imports:
     tools
 Suggests:
+    haven,
+    knitr,
+    mospiR,
+    rmarkdown,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
+VignetteBuilder: knitr
 NeedsCompilation: yes
