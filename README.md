@@ -86,7 +86,3 @@ Two column types appear in NESSTAR containers:
 - Mode 5 (numerics): packed formats from 4-bit nibbles to IEEE 754 `float64`, returned as `numeric`; missing values become `NA`
 
 The parser auto-detects byte order (little-endian by default, big-endian fallback) and converts all strings to UTF-8.
-
-## License
-
-MIT 
