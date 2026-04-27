@@ -150,7 +150,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
     row <- 0L
     while (row < nrow) {
       n_rows <- min(chunk_size, nrow - row)
-      chunk <- .decode_columns_range(x$raw, vars, row, n_rows)
+      chunk <- .decode_columns_range(x$raw, vars, row, n_rows, nrow)
       df <- as.data.frame(
         setNames(chunk, col_names),
         stringsAsFactors = FALSE, check.names = FALSE
@@ -174,8 +174,6 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   invisible(paths)
 }
 
-# ----------------------------------------------------------------- internals
-
 .find_dataset <- function(x, dataset_number) {
   for (ds in x$datasets) {
     if (ds$dataset_number == dataset_number) {
@@ -188,14 +186,41 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   )
 }
 
+# Resolve the true mode for a mode_code=0 variable by checking whether
+# data_length matches mode 5 (numeric) or mode 1 (fixed-width string).
+# Some older NSS files write mode_code=0 for both numeric columns (e.g.
+# Subsample_multiplier, value_format_code=10/float64) and string columns
+# (e.g. HH_Type_code, value_format_code=2/nibble but stored as 2-byte ASCII).
+# The data_length is the definitive discriminator:
+#   mode 5 expected bytes: nibble=ceil(n/2), byte=n, u16=2n, ..., f64=8n
+#   mode 1 expected bytes: n * width_value
+.resolve_mode0 <- function(v, total_nrow) {
+  mode5_bytes <- switch(as.character(v$value_format_code),
+    "2"  = (total_nrow + 1L) %/% 2L, # FMT_NIBBLE: 4 bits/row
+    "3"  = total_nrow, # FMT_BYTE
+    "4"  = total_nrow * 2L, # FMT_UINT16
+    "5"  = total_nrow * 3L, # FMT_UINT24
+    "6"  = total_nrow * 4L, # FMT_UINT32
+    "7"  = total_nrow * 5L, # FMT_UINT40
+    "10" = total_nrow * 8L, # FMT_FLOAT64
+    NA_integer_
+  )
+  if (!is.na(mode5_bytes) && v$data_length == mode5_bytes) 5L else 1L
+}
+
 # Decode all rows for a list of variables. Returns a named list of vectors.
 .decode_columns <- function(raw, vars, nrow) {
   cols <- vector("list", length(vars))
   names(cols) <- vapply(vars, `[[`, character(1), "name")
   for (i in seq_along(vars)) {
     v <- vars[[i]]
-    if (v$data_length == 0 || !v$mode_code %in% c(1L, 5L)) {
-      cols[[i]] <- if (v$mode_code == 1L) character(nrow) else rep(NA_real_, nrow)
+    effective_mode <- if (v$mode_code == 0L && v$data_length > 0L) {
+      .resolve_mode0(v, nrow)
+    } else {
+      v$mode_code
+    }
+    if (v$data_length == 0L || !effective_mode %in% c(1L, 5L)) {
+      cols[[i]] <- if (effective_mode == 1L) character(nrow) else rep(NA_real_, nrow)
       next
     }
     cols[[i]] <- .Call(
@@ -203,7 +228,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
       raw,
       v$data_offset,
       v$data_length,
-      v$mode_code,
+      effective_mode,
       v$value_format_code,
       v$value_offset_i64,
       v$width_value,
@@ -214,12 +239,18 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
 }
 
 # Decode a row range [row_start, row_start + n_rows) for chunked export.
-.decode_columns_range <- function(raw, vars, row_start, n_rows) {
+# total_nrow is the full dataset row count (needed to resolve mode_code=0).
+.decode_columns_range <- function(raw, vars, row_start, n_rows, total_nrow) {
   cols <- vector("list", length(vars))
   for (i in seq_along(vars)) {
     v <- vars[[i]]
-    if (v$data_length == 0 || !v$mode_code %in% c(1L, 5L)) {
-      cols[[i]] <- if (v$mode_code == 1L) character(n_rows) else rep(NA_real_, n_rows)
+    effective_mode <- if (v$mode_code == 0L && v$data_length > 0L) {
+      .resolve_mode0(v, total_nrow)
+    } else {
+      v$mode_code
+    }
+    if (v$data_length == 0L || !effective_mode %in% c(1L, 5L)) {
+      cols[[i]] <- if (effective_mode == 1L) character(n_rows) else rep(NA_real_, n_rows)
       next
     }
     cols[[i]] <- .Call(
@@ -227,7 +258,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
       raw,
       v$data_offset,
       v$data_length,
-      v$mode_code,
+      effective_mode,
       v$value_format_code,
       v$value_offset_i64,
       v$width_value,

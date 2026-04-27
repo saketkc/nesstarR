@@ -17,7 +17,8 @@ mospi_data <- {
   } else {
     # Sibling-repo default: nesstarR/ and mospiR/ sit next to each other
     normalizePath(file.path("..", "..", "mospiR", "data", "hces"),
-                  mustWork = FALSE)
+      mustWork = FALSE
+    )
   }
 }
 
@@ -60,9 +61,11 @@ downloads the full archive for one survey idno. The API key is read from
 `MOSPI_KEY` (set it in `~/.Renviron`).
 
 ```{r download, eval=FALSE}
-api_key  <- Sys.getenv("MOSPI_KEY")
-data_dir <- file.path("data", "hces",
-                      "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012")
+api_key <- Sys.getenv("MOSPI_KEY")
+data_dir <- file.path(
+  "data", "hces",
+  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012"
+)
 
 download_dataset(
   "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012",
@@ -165,8 +168,10 @@ Pass `columns` to load only what you need:
 food <- nesstar_read_dataset(
   nb,
   dataset_number = food_ds,
-  columns = c("HHID", "State_code", "District_Code", "Sector",
-              "Combined_Multiplier", "Item_Code", "Total_Consumption_Value")
+  columns = c(
+    "HHID", "State_code", "District_Code", "Sector",
+    "Combined_Multiplier", "Item_Code", "Total_Consumption_Value"
+  )
 )
 cat("Rows:", nrow(food), "| Columns:", ncol(food), "\n")
 head(food)
@@ -178,10 +183,11 @@ Weighted mean monthly household expenditure on cereals (item codes 101–140),
 rural vs. urban. The `Multiplier` column is the survey weight.
 
 ```{r cereals}
-cereals    <- food[as.integer(food$Item_Code) >= 101 &
-                   as.integer(food$Item_Code) <= 140, ]
+cereals <- food[as.integer(food$Item_Code) >= 101 &
+  as.integer(food$Item_Code) <= 140, ]
 hh_cereals <- aggregate(Total_Consumption_Value ~ HHID + Sector + Combined_Multiplier,
-                        data = cereals, FUN = sum)
+  data = cereals, FUN = sum
+)
 
 rural <- hh_cereals[hh_cereals$Sector == "1", ]
 urban <- hh_cereals[hh_cereals$Sector == "2", ]
@@ -200,9 +206,11 @@ It processes 50,000 rows per chunk by default, so even the 4.65 GB T1 file
 does not require loading all rows at once.
 
 ```{r export}
-output_dir <- file.path(tempdir(), "nss68t2")
+# Write CSVs alongside the .Nesstar file so they survive across R sessions
+# and avoid filling /tmp on machines with limited temporary storage.
+output_dir <- dirname(nesstar_path)
 nesstar_export(nb, output_dir = output_dir, compress = FALSE)
-list.files(output_dir)
+list.files(output_dir, pattern = "\\.csv$")
 ```
 
 Pass `compress = TRUE` (the default) for gzip-compressed output, which
@@ -210,117 +218,310 @@ typically halves file size with negligible extra time.
 
 ```{r export_subset, eval=FALSE}
 nesstar_export(nb,
-               output_dir = output_dir,
-               datasets   = food_ds,
-               compress   = TRUE,
-               chunk_size = 100000L)
+  output_dir = output_dir,
+  datasets   = food_ds,
+  compress   = TRUE,
+  chunk_size = 100000L
+)
 ```
 
 ## Verify against Stata reference files
 
-For this, I took help of a colleague to install Nesstar.exe and asked them to convert the binary to stata file. 
-The code below checks that nesstarR's CSV output matches it.
+The original NESSTAR Publisher software was used to export each dataset to Stata `.dta` format.
+The code below loads those exports and checks that nesstarR's CSV output matches them row-for-row.
 
 ### Unzip the Stata archive
 
 ```{r stata_unzip}
-stata_dir <- file.path(tempdir(), "stata_68t2")
+# Extract alongside the .Nesstar output to avoid exhausting /tmp on
+# space-constrained machines (the full STATA archive expands to ~1.4 GB).
+stata_dir <- file.path(output_dir, "stata_68t2")
 unzip(stata_zip, exdir = stata_dir)
-dta_files <- sort(list.files(stata_dir, pattern = "\\.dta$",
-                              full.names = TRUE, recursive = TRUE))
+dta_files <- sort(list.files(stata_dir,
+  pattern = "\\.dta$",
+  full.names = TRUE, recursive = TRUE
+))
 cat(length(dta_files), "Stata files found\n")
 ```
 
-### Match datasets by column set
+### Build the dataset correspondence table
 
-The Stata archive labels each file "Level N". nesstarR names output files
-`_dsNN`. We read only column schemas from the Stata files (`n_max = 0` loads
-the header without row data) and match each level to a CSV by its normalised
-column name set, which is unique across all 11 datasets.
+The NESSTAR container stores a file name for every dataset in its embedded
+metadata (`<FileName>` XML field decoded by `nesstar_metadata()`). For NSS
+files this is something like `Level_1.sav`. We extract the level number from
+that string and join to the STATA export filenames — a structural match that
+is independent of any data property. If the metadata names do not carry level
+numbers we fall back to matching on unique `(nrow, ncol)` pairs.
 
 ```{r stata_match}
 library(haven)
 
-# n_max = 0: read header only, no row data loaded
-stata_meta <- lapply(dta_files, function(f) {
-  df <- read_dta(f, n_max = 0L)
-  list(
-    path  = f,
-    level = as.integer(sub(".*[Ll]evel[_\\s-]*(\\d+).*", "\\1",
-                           basename(f), perl = TRUE)),
-    ncol  = ncol(df),
-    cols  = names(df)
-  )
-})
-
-csv_files <- sort(list.files(output_dir, pattern = "_ds\\d+\\.csv$",
-                              full.names = TRUE))
-csv_meta <- lapply(csv_files, function(f) {
-  hdr    <- names(read.csv(f, nrows = 0L, check.names = FALSE))
-  ds_num <- as.integer(sub(".*_ds(\\d+)\\.csv$", "\\1", basename(f)))
-  list(path = f, ds_num = ds_num, cols = hdr)
-})
-
-# STATA converts '.' in column names to '_'; normalise before comparing
-norm_names <- function(x) toupper(gsub("\\.", "_", trimws(x)))
-
-for (sm in stata_meta) {
-  sn <- norm_names(sm$cols)
-  cm <- Filter(function(x) setequal(norm_names(x$cols), sn), csv_meta)
-  if (length(cm) == 0L) {
-    cat(sprintf("Level %2d  cols=%d  -> NO MATCH\n", sm$level, sm$ncol))
-    next
+# Extract the integer N from "Level_N" / "Level N" / "LevelN" etc.
+level_num <- function(s) {
+  if (is.na(s) || !nzchar(s)) {
+    return(NA_integer_)
   }
-  cat(sprintf("Level %2d -> ds%02d  cols=%d  cols_match=TRUE\n",
-              sm$level, cm[[1L]]$ds_num, sm$ncol))
+  m <- regexpr("[Ll]evel[[:space:]_-]*(\\d+)", s, perl = TRUE)
+  if (m[[1L]] == -1L) {
+    return(NA_integer_)
+  }
+  cs <- attr(m, "capture.start")[[1L]]
+  cl <- attr(m, "capture.length")[[1L]]
+  as.integer(substr(s, cs, cs + cl - 1L))
 }
-```
 
-Expected output: every Stata level maps to exactly one nesstarR CSV dataset.
+# If the container has embedded XML metadata (NSS 64+), each dataset carries a
+# file name such as "Level_1.sav". We extract the level number from that.
+# Older containers (e.g. some NSS 68 files) return NULL; in that case every
+# ds$level stays NA and we rely entirely on the (nrow, ncol) fallback below.
+meta <- nesstar_metadata(nb)
+nesstar_ds <- if (!is.null(meta)) {
+  do.call(rbind, lapply(meta$datasets, function(dm) {
+    data.frame(
+      ds_num = dm$dataset_number,
+      file_name = dm$file_name,
+      level = level_num(dm$file_name),
+      stringsAsFactors = FALSE
+    )
+  }))
+} else {
+  cat("No embedded XML metadata — falling back to (nrow, ncol) matching.\n")
+  data.frame(
+    ds_num = vapply(nb$datasets, `[[`, integer(1), "dataset_number"),
+    file_name = NA_character_,
+    level = NA_integer_,
+    stringsAsFactors = FALSE
+  )
+}
+if (!is.null(meta)) {
+  print(nesstar_ds[, c("ds_num", "file_name", "level")])
+}
 
-### Spot-check numeric values
+# Read header only (n_max=0) to get column names; read row count from binary.
+dta_nobs <- function(path) {
+  raw <- readBin(path, "raw", n = 512L)
+  if (length(raw) < 10L) {
+    return(NA_integer_)
+  }
+  ver <- as.integer(raw[1L])
+  if (ver %in% c(102L, 108L, 110L, 113L, 114L, 115L)) {
+    bo <- if (as.integer(raw[2L]) == 1L) "big" else "little"
+    return(readBin(raw[7L:10L], "integer", n = 1L, size = 4L, endian = bo))
+  }
+  lt <- as.raw(0x3c)
+  Nb <- as.raw(0x4e)
+  for (i in seq_len(length(raw) - 4L)) {
+    if (raw[i] == lt && raw[i + 1L] == Nb && raw[i + 2L] == as.raw(0x3e)) {
+      return(readBin(raw[(i + 3L):(i + 6L)], "integer",
+        n = 1L, size = 4L,
+        endian = "little"
+      ))
+    }
+  }
+  NA_integer_
+}
 
-Compare the first 500 rows of each matched dataset cell by cell. Any
-difference beyond floating-point epsilon (`1e-9`) is flagged.
+stata_ds <- do.call(rbind, lapply(dta_files, function(f) {
+  df <- read_dta(f, n_max = 0L)
+  data.frame(
+    stata_path = f,
+    level = level_num(basename(f)),
+    nrow = dta_nobs(f),
+    ncol = ncol(df),
+    stringsAsFactors = FALSE
+  )
+}))
 
-```{r stata_values}
-SPOT_ROWS <- 500L
+csv_files <- sort(list.files(output_dir,
+  pattern = "_ds\\d+\\.csv$",
+  full.names = TRUE
+))
+csv_meta <- lapply(csv_files, function(f) {
+  hdr <- names(read.csv(f, nrows = 0L, check.names = FALSE))
+  wc_out <- system(paste("wc -l", shQuote(f)), intern = TRUE)
+  nrows <- as.integer(sub("^\\s*(\\d+).*", "\\1", wc_out)) - 1L
+  ds_num <- as.integer(sub(".*_ds(\\d+)\\.csv$", "\\1", basename(f)))
+  list(ds_num = ds_num, path = f, nrow = nrows, ncol = length(hdr))
+})
 
-for (sm in stata_meta) {
-  sn <- norm_names(sm$cols)
-  cm <- Filter(function(x) setequal(norm_names(x$cols), sn), csv_meta)
-  if (length(cm) == 0L) next
-  cm <- cm[[1L]]
+match_tbl <- data.frame(
+  level = integer(), ds_num = integer(),
+  csv_path = character(), stata_path = character(), method = character(),
+  stringsAsFactors = FALSE
+)
 
-  s_df <- read_dta(sm$path, n_max = SPOT_ROWS)
-  c_df <- read.csv(cm$path, nrows = SPOT_ROWS, check.names = FALSE)
+for (i in seq_len(nrow(stata_ds))) {
+  sd <- stata_ds[i, ]
 
-  s_norm <- norm_names(names(s_df))
-  c_norm <- norm_names(names(c_df))
-  common <- intersect(s_norm, c_norm)
-
-  mismatches <- 0L
-  for (col in common) {
-    sv <- suppressWarnings(as.numeric(as.character(
-            s_df[[which(s_norm == col)[1L]]])))
-    cv <- suppressWarnings(as.numeric(as.character(
-            c_df[[which(c_norm == col)[1L]]])))
-    if (!all(is.na(sv)) && !all(is.na(cv))) {
-      mismatches <- mismatches +
-        sum(abs(sv - cv) > 1e-9, na.rm = TRUE) +
-        sum(is.na(sv) & !is.na(cv)) +
-        sum(!is.na(sv) & is.na(cv))
-    } else {
-      mismatches <- mismatches +
-        sum(trimws(as.character(sv)) != trimws(as.character(cv)), na.rm = TRUE)
+  # Primary: metadata level number
+  nm <- nesstar_ds[!is.na(nesstar_ds$level) & nesstar_ds$level == sd$level, ]
+  if (nrow(nm) == 1L) {
+    csv_f <- Filter(function(cm) cm$ds_num == nm$ds_num, csv_meta)
+    if (length(csv_f) == 1L) {
+      match_tbl <- rbind(match_tbl, data.frame(
+        level = sd$level, ds_num = nm$ds_num,
+        csv_path = csv_f[[1L]]$path, stata_path = sd$stata_path,
+        method = "metadata", stringsAsFactors = FALSE
+      ))
+      next
     }
   }
 
+  # Fallback: unique (nrow, ncol) among not-yet-matched NESSTAR datasets
+  taken <- match_tbl$ds_num
+  cands <- Filter(function(cm) {
+    !cm$ds_num %in% taken &&
+      cm$nrow == sd$nrow
+  }, csv_meta)
+  if (length(cands) > 1L) {
+    cands <- Filter(function(cm) cm$ncol == sd$ncol, cands)
+  }
+  if (length(cands) == 1L) {
+    match_tbl <- rbind(match_tbl, data.frame(
+      level = sd$level, ds_num = cands[[1L]]$ds_num,
+      csv_path = cands[[1L]]$path, stata_path = sd$stata_path,
+      method = "row+col", stringsAsFactors = FALSE
+    ))
+  } else {
+    cat(sprintf(
+      "Level %2d: COULD NOT MATCH (nrow=%d, ncol=%d)\n",
+      sd$level, sd$nrow, sd$ncol
+    ))
+  }
+}
+
+match_tbl <- match_tbl[order(match_tbl$level), ]
+cat(sprintf("\n%d / %d STATA levels matched:\n", nrow(match_tbl), nrow(stata_ds)))
+for (i in seq_len(nrow(match_tbl))) {
+  r <- match_tbl[i, ]
   cat(sprintf(
-    "Level %2d / ds%02d: %d cols x %d rows - %s\n",
-    sm$level, cm$ds_num, length(common), SPOT_ROWS,
-    if (mismatches == 0L) "all values match" else paste(mismatches, "MISMATCHES")
+    "  Level %2d -> ds%02d  [%-8s]  %s\n",
+    r$level, r$ds_num, r$method, basename(r$csv_path)
   ))
+}
+```
+
+### Full dataset verification
+
+Load every matched pair completely and compare all rows and all columns.
+STATA converts `.` to `_` in variable names; `norm_col()` normalises both
+sides. `haven::zap_labels()` strips value-label attributes so numeric
+columns compare as plain doubles. Each dataset is freed from memory after
+comparison to limit peak usage.
+
+```{r stata_verify}
+# Normalise column names: upper-case, any run of . or spaces -> _
+norm_col <- function(x) toupper(gsub("[. ]+", "_", trimws(x)))
+
+# Strip haven label / factor wrappers; return comparable base R vector
+strip_stata <- function(x) {
+  if (inherits(x, c("haven_labelled", "haven_labelled_spss"))) {
+    return(as.numeric(unclass(x)))
+  }
+  if (is.factor(x)) {
+    return(as.character(x))
+  }
+  x
+}
+
+pass_all <- TRUE
+
+for (i in seq_len(nrow(match_tbl))) {
+  r <- match_tbl[i, ]
+
+  s_df <- tryCatch(
+    as.data.frame(zap_labels(read_dta(r$stata_path))),
+    error = function(e) {
+      cat(sprintf(
+        "Level %2d / ds%02d: SKIP  (STATA read error: %s)\n",
+        r$level, r$ds_num, conditionMessage(e)
+      ))
+      NULL
+    }
+  )
+  if (is.null(s_df)) {
+    pass_all <- FALSE
+    next
+  }
+  c_df <- read.csv(r$csv_path, check.names = FALSE)
+
+  names(s_df) <- norm_col(names(s_df))
+  names(c_df) <- norm_col(names(c_df))
+
+  if (nrow(s_df) != nrow(c_df)) {
+    cat(sprintf(
+      "Level %2d / ds%02d: FAIL  row count STATA=%d  CSV=%d\n",
+      r$level, r$ds_num, nrow(s_df), nrow(c_df)
+    ))
+    pass_all <- FALSE
+    rm(s_df, c_df)
+    gc(verbose = FALSE)
+    next
+  }
+
+  only_s <- setdiff(names(s_df), names(c_df))
+  only_c <- setdiff(names(c_df), names(s_df))
+  common <- intersect(names(s_df), names(c_df))
+
+  # Per-column comparison across ALL rows.
+  # Many survey code columns (Sch_no, Level, …) are stored as zero-padded
+  # strings in the NESSTAR binary and are preserved as such by nesstarR, but
+  # read.csv() strips leading zeros when parsing quoted numeric-looking fields
+  # (e.g. "010" → 10).  STATA also carries zero-padded display formats.  Both
+  # representations encode the same integer value, so we compare numerically
+  # whenever every non-NA cell on both sides is numeric-convertible.
+  col_fail <- character(0)
+  for (col in common) {
+    sv <- strip_stata(s_df[[col]])
+    cv <- c_df[[col]]
+    sv_c <- trimws(as.character(sv))
+    cv_c <- trimws(as.character(cv))
+    sv_n <- suppressWarnings(as.numeric(sv_c))
+    cv_n <- suppressWarnings(as.numeric(cv_c))
+    # Extra NAs introduced by coercion (not originally NA or empty)?
+    sv_was_na <- is.na(sv_c) | sv_c == ""
+    cv_was_na <- is.na(cv_c) | cv_c == ""
+    if (sum(is.na(sv_n) & !sv_was_na) == 0L &&
+      sum(is.na(cv_n) & !cv_was_na) == 0L) {
+      # Both sides fully numeric-representable: compare as numbers
+      n_diff <- sum(abs(sv_n - cv_n) > 1e-9, na.rm = TRUE) +
+        sum(xor(is.na(sv_n), is.na(cv_n)))
+    } else {
+      # At least one side has genuine string values: compare as character
+      n_diff <- sum(sv_c != cv_c, na.rm = TRUE) +
+        sum(xor(is.na(sv_c), is.na(cv_c)))
+    }
+    if (n_diff > 0L) col_fail <- c(col_fail, sprintf("%s(%d)", col, n_diff))
+  }
+
+  if (length(col_fail) == 0L) {
+    cat(sprintf(
+      "Level %2d / ds%02d: PASS  %7d rows x %d cols\n",
+      r$level, r$ds_num, nrow(s_df), length(common)
+    ))
+  } else {
+    pass_all <- FALSE
+    cat(sprintf(
+      "Level %2d / ds%02d: FAIL  %7d rows x %d cols | diffs: %s\n",
+      r$level, r$ds_num, nrow(s_df), length(common),
+      paste(col_fail, collapse = ", ")
+    ))
+  }
+  if (length(only_s) > 0L) {
+    cat(sprintf("         only in STATA: %s\n", paste(only_s, collapse = ", ")))
+  }
+  if (length(only_c) > 0L) {
+    cat(sprintf("         only in CSV:   %s\n", paste(only_c, collapse = ", ")))
+  }
+
+  rm(s_df, c_df)
+  gc(verbose = FALSE)
+}
+
+if (pass_all) {
+  cat("\n==> ALL LEVELS PASS: nesstarR output is identical to the STATA reference export.\n")
+} else {
+  cat("\n==> Failures detected — see details above.\n")
 }
 ```
 
