@@ -1,0 +1,23 @@
+url: https://saketkc.github.io/nesstarR/
+
+template:
+  bootstrap: 5
+
+navbar:
+  structure:
+    left:  [intro, reference, articles]
+    right: [search, github]
+  components:
+    github:
+      icon: fab fa-github
+      href: https://github.com/saketkc/nesstarR
+      aria-label: GitHub
+
+home:
+  title: "nesstarR"
+  description: "Read and export NESSTAR binary survey data containers"
+
+articles:
+  - title: "Getting started"
+    contents:
+      - nesstarR
