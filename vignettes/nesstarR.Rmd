@@ -109,14 +109,14 @@ A single `.Nesstar` container holds multiple datasets, one per schedule
 block (household, person, food, non-food, …).
 
 ```{r datasets}
-nesstar_datasets(nb)
+ds_tbl <- nesstar_datasets(nb)
+ds_tbl
 ```
 
 The dataset with the largest row count is the food block: one row per
 household × item combination (~4-5 million rows for NSS 68 T2).
 
 ```{r food_ds}
-ds_tbl <- nesstar_datasets(nb)
 food_ds <- ds_tbl$dataset_number[which.max(ds_tbl$row_count)]
 cat("Food block dataset number:", food_ds, "\n")
 cat("Rows:", ds_tbl$row_count[ds_tbl$dataset_number == food_ds], "\n")
@@ -256,7 +256,6 @@ numbers we fall back to matching on unique `(nrow, ncol)` pairs.
 ```{r stata_match}
 library(haven)
 
-# Extract the integer N from "Level_N" / "Level N" / "LevelN" etc.
 level_num <- function(s) {
   if (is.na(s) || !nzchar(s)) {
     return(NA_integer_)
@@ -270,11 +269,9 @@ level_num <- function(s) {
   as.integer(substr(s, cs, cs + cl - 1L))
 }
 
-# If the container has embedded XML metadata (NSS 64+), each dataset carries a
-# file name such as "Level_1.sav". We extract the level number from that.
-# Older containers (e.g. some NSS 68 files) return NULL; in that case every
-# ds$level stays NA and we rely entirely on the (nrow, ncol) fallback below.
-meta <- nesstar_metadata(nb)
+# Reuse metadata from earlier chunk; older containers return NULL, in which
+# case every ds$level stays NA and we fall back to (nrow, ncol) matching.
+if (!exists("meta")) meta <- nesstar_metadata(nb)
 nesstar_ds <- if (!is.null(meta)) {
   do.call(rbind, lapply(meta$datasets, function(dm) {
     data.frame(
@@ -297,7 +294,6 @@ if (!is.null(meta)) {
   print(nesstar_ds[, c("ds_num", "file_name", "level")])
 }
 
-# Read header only (n_max=0) to get column names; read row count from binary.
 dta_nobs <- function(path) {
   raw <- readBin(path, "raw", n = 512L)
   if (length(raw) < 10L) {
@@ -353,7 +349,6 @@ match_tbl <- data.frame(
 for (i in seq_len(nrow(stata_ds))) {
   sd <- stata_ds[i, ]
 
-  # Primary: metadata level number
   nm <- nesstar_ds[!is.na(nesstar_ds$level) & nesstar_ds$level == sd$level, ]
   if (nrow(nm) == 1L) {
     csv_f <- Filter(function(cm) cm$ds_num == nm$ds_num, csv_meta)
@@ -367,7 +362,6 @@ for (i in seq_len(nrow(stata_ds))) {
     }
   }
 
-  # Fallback: unique (nrow, ncol) among not-yet-matched NESSTAR datasets
   taken <- match_tbl$ds_num
   cands <- Filter(function(cm) {
     !cm$ds_num %in% taken &&
@@ -410,10 +404,8 @@ columns compare as plain doubles. Each dataset is freed from memory after
 comparison to limit peak usage.
 
 ```{r stata_verify}
-# Normalise column names: upper-case, any run of . or spaces -> _
 norm_col <- function(x) toupper(gsub("[. ]+", "_", trimws(x)))
 
-# Strip haven label / factor wrappers; return comparable base R vector
 strip_stata <- function(x) {
   if (inherits(x, c("haven_labelled", "haven_labelled_spss"))) {
     return(as.numeric(unclass(x)))
@@ -463,13 +455,8 @@ for (i in seq_len(nrow(match_tbl))) {
   only_c <- setdiff(names(c_df), names(s_df))
   common <- intersect(names(s_df), names(c_df))
 
-  # Per-column comparison across ALL rows.
-  # Many survey code columns (Sch_no, Level, …) are stored as zero-padded
-  # strings in the NESSTAR binary and are preserved as such by nesstarR, but
-  # read.csv() strips leading zeros when parsing quoted numeric-looking fields
-  # (e.g. "010" → 10).  STATA also carries zero-padded display formats.  Both
-  # representations encode the same integer value, so we compare numerically
-  # whenever every non-NA cell on both sides is numeric-convertible.
+  # Zero-padded survey codes (e.g. "010") lose leading zeros through
+  # read.csv(); compare numerically when both sides are numeric-convertible.
   col_fail <- character(0)
   for (col in common) {
     sv <- strip_stata(s_df[[col]])
@@ -478,16 +465,13 @@ for (i in seq_len(nrow(match_tbl))) {
     cv_c <- trimws(as.character(cv))
     sv_n <- suppressWarnings(as.numeric(sv_c))
     cv_n <- suppressWarnings(as.numeric(cv_c))
-    # Extra NAs introduced by coercion (not originally NA or empty)?
     sv_was_na <- is.na(sv_c) | sv_c == ""
     cv_was_na <- is.na(cv_c) | cv_c == ""
     if (sum(is.na(sv_n) & !sv_was_na) == 0L &&
       sum(is.na(cv_n) & !cv_was_na) == 0L) {
-      # Both sides fully numeric-representable: compare as numbers
       n_diff <- sum(abs(sv_n - cv_n) > 1e-9, na.rm = TRUE) +
         sum(xor(is.na(sv_n), is.na(cv_n)))
     } else {
-      # At least one side has genuine string values: compare as character
       n_diff <- sum(sv_c != cv_c, na.rm = TRUE) +
         sum(xor(is.na(sv_c), is.na(cv_c)))
     }

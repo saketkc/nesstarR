@@ -208,7 +208,6 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   if (!is.na(mode5_bytes) && v$data_length == mode5_bytes) 5L else 1L
 }
 
-# Decode all rows for a list of variables. Returns a named list of vectors.
 .decode_columns <- function(raw, vars, nrow) {
   cols <- vector("list", length(vars))
   names(cols) <- vapply(vars, `[[`, character(1), "name")
@@ -238,8 +237,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   cols
 }
 
-# Decode a row range [row_start, row_start + n_rows) for chunked export.
-# total_nrow is the full dataset row count (needed to resolve mode_code=0).
+# total_nrow is needed to resolve mode_code=0 variables.
 .decode_columns_range <- function(raw, vars, row_start, n_rows, total_nrow) {
   cols <- vector("list", length(vars))
   for (i in seq_along(vars)) {

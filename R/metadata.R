@@ -94,7 +94,7 @@ nesstar_metadata <- function(x) {
   le_off <- .u32le(raw, 0x26L) # R is 1-based; byte 0x25 = index 38
   be_off <- .u32be(raw, 0x26L)
   file_len <- length(raw)
-  le <- if (le_off + 4L <= file_len) TRUE else FALSE
+  le <- le_off + 4L <= file_len
 
   idx_off <- if (le) le_off else be_off
   count <- if (le) .u32le(raw, idx_off + 1L) else .u32be(raw, idx_off + 1L)
@@ -123,7 +123,6 @@ nesstar_metadata <- function(x) {
   )
 }
 
-# Extract <FileName> text from a FileDesc XML string
 .xml_file_name <- function(xml_text) {
   m <- regmatches(xml_text, regexpr("<FileName>([^<]*)</FileName>", xml_text))
   if (length(m) == 0L || !nchar(m)) {
@@ -132,7 +131,6 @@ nesstar_metadata <- function(x) {
   sub("<FileName>([^<]*)</FileName>", "\\1", m)
 }
 
-# Extract Category Value/Label pairs from a Categories XML string
 .xml_categories <- function(xml_text) {
   # Simple regex-based extraction; avoids XML parser dependency
   pattern <- 'Value="([^"]*)"[^>]*Label="([^"]*)"'
@@ -152,7 +150,6 @@ nesstar_metadata <- function(x) {
   cats
 }
 
-# Little-endian u32 from a raw vector (1-based offset)
 .u32le <- function(raw, off) {
   as.integer(raw[off]) +
     as.integer(raw[off + 1L]) * 256L +
@@ -160,7 +157,6 @@ nesstar_metadata <- function(x) {
     bitwShiftL(as.integer(raw[off + 3L]), 24L)
 }
 
-# Big-endian u32
 .u32be <- function(raw, off) {
   bitwShiftL(as.integer(raw[off]), 24L) +
     as.integer(raw[off + 1L]) * 65536L +
@@ -168,5 +164,4 @@ nesstar_metadata <- function(x) {
     as.integer(raw[off + 3L])
 }
 
-# Null-coalescing helper
 `%||%` <- function(a, b) if (!is.null(a)) a else b
