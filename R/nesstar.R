@@ -5,6 +5,10 @@
 #'
 #' @param path Path to a \code{.Nesstar} file.
 #' @return A \code{nesstar_binary} list (S3 class).
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' x
 #' @export
 nesstar_parse <- function(path) {
   path <- normalizePath(path, mustWork = TRUE)
@@ -34,6 +38,10 @@ print.nesstar_binary <- function(x, ...) {
 #' @param x A \code{nesstar_binary} object from \code{\link{nesstar_parse}}.
 #' @return A data frame with columns \code{dataset_number}, \code{row_count},
 #'   \code{variable_count}.
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' nesstar_datasets(x)
 #' @export
 nesstar_datasets <- function(x) {
   stopifnot(inherits(x, "nesstar_binary"))
@@ -55,6 +63,10 @@ nesstar_datasets <- function(x) {
 #'   \code{\link{nesstar_datasets}}).
 #' @return A data frame with one row per variable describing its storage
 #'   properties.
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' nesstar_variables(x, dataset_number = 1)
 #' @export
 nesstar_variables <- function(x, dataset_number) {
   stopifnot(inherits(x, "nesstar_binary"))
@@ -85,6 +97,11 @@ nesstar_variables <- function(x, dataset_number) {
 #' @param columns Optional character vector of column names to read.  When
 #'   \code{NULL} (default) all columns are returned.
 #' @return A \code{data.frame}.
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' nesstar_read_dataset(x, dataset_number = 1)
+#' nesstar_read_dataset(x, dataset_number = 1, columns = c("AGE", "NAME"))
 #' @export
 nesstar_read_dataset <- function(x, dataset_number, columns = NULL) {
   stopifnot(inherits(x, "nesstar_binary"))
@@ -118,6 +135,11 @@ nesstar_read_dataset <- function(x, dataset_number, columns = NULL) {
 #' @param chunk_size Number of rows to process per iteration (reduces peak
 #'   memory use).
 #' @return Invisibly, a character vector of output file paths.
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' out <- nesstar_export(x, output_dir = tempdir())
+#' read.csv(out[1])
 #' @export
 nesstar_export <- function(x, output_dir, datasets = NULL,
                            compress = TRUE, chunk_size = 50000L) {
@@ -152,7 +174,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
       n_rows <- min(chunk_size, nrow - row)
       chunk <- .decode_columns_range(x$raw, vars, row, n_rows, nrow)
       df <- as.data.frame(
-        setNames(chunk, col_names),
+        stats::setNames(chunk, col_names),
         stringsAsFactors = FALSE, check.names = FALSE
       )
       utils::write.table(df,

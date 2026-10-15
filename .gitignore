@@ -10,22 +10,8 @@ src/*.dylib
 
 *.tar.gz
 *.Rcheck/
-man/*.Rd
-NAMESPACE
 
 /doc/
 /Meta/
-
-/.roxygen-cache/
-d artifacts
-*.tar.gz
-*.Rcheck/
-man/*.Rd
-NAMESPACE
-
-# Installed package files
-/doc/
-/Meta/
-
-# roxygen2 cache
+/docs/
 /.roxygen-cache/

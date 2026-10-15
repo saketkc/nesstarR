@@ -1,23 +1,29 @@
 Package: nesstarR
 Type: Package
-Title: Read and Export NESSTAR Binary Containers
+Title: Read and Export 'NESSTAR' Binary Containers
 Version: 0.1.0
 Authors@R: person("Saket", "Choudhary", email = "saketkc@gmail.com",
-    role = c("aut", "cre"), comment = c(ORCID = "0000-0001-5202-7633"))
-Description: Reads .Nesstar binary containers distributed by agencies doing statistical 
-    surveys (e.g. MOSPI India). Decodes compact binary and string columns into
-    R data frames and exports datasets to CSV.
+    role = c("aut", "cre", "cph"), comment = c(ORCID = "0000-0001-5202-7633"))
+Description: Reads '.Nesstar' binary containers produced by the 'NESSTAR'
+    Publisher software and distributed by statistical agencies such as the
+    Ministry of Statistics and Programme Implementation (MoSPI), India.
+    Decodes packed numeric and fixed-width string columns into data frames,
+    recovers embedded variable labels and category codes, and exports
+    datasets to CSV in memory-bounded chunks.
 License: MIT + file LICENSE
+URL: https://github.com/saketkc/nesstarR, https://saket-choudhary.me/nesstarR/
+BugReports: https://github.com/saketkc/nesstarR/issues
 Encoding: UTF-8
-RoxygenNote: 7.3.3
 Imports:
-    tools
+    tools,
+    stats,
+    utils
 Suggests:
     haven,
     knitr,
-    mospiR,
     rmarkdown,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 NeedsCompilation: yes
+Config/roxygen2/version: 8.1.0

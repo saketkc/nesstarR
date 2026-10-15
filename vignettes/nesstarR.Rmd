@@ -34,6 +34,20 @@ stata_zip <- normalizePath(
   file.path("..", "stata", "Nss68_STATA_2012.zip"),
   mustWork = FALSE
 )
+
+# The NSS microdata cannot be redistributed, so chunks only run when the files
+# are available locally (never on CRAN).
+has_data <- file.exists(nesstar_path)
+has_stata <- has_data && file.exists(stata_zip) &&
+  requireNamespace("haven", quietly = TRUE)
+knitr::opts_chunk$set(eval = has_data)
+```
+
+```{r no-data, eval=!has_data, echo=FALSE, results="asis"}
+cat(
+  "> The NSS 68 data files were not found when this vignette was built, so",
+  "the code below is shown without output. Set `MOSPI_DATA` to run it.\n"
+)
 ```
 
 [NSS rounds 64, 66, and 68](https://microdata.gov.in/NADA/index.php/catalog/?page=1&sort_order=desc&ps=15) come as `.Nesstar` binaries inside `.rar` archives.
@@ -50,7 +64,6 @@ remotes::install_github("saketkc/nesstarR")
 ```
 
 ```{r libs}
-library(mospiR)
 library(nesstarR)
 ```
 
@@ -61,6 +74,7 @@ downloads the full archive for one survey idno. The API key is read from
 `MOSPI_KEY` (set it in `~/.Renviron`).
 
 ```{r download, eval=FALSE}
+library(mospiR)
 api_key <- Sys.getenv("MOSPI_KEY")
 data_dir <- file.path(
   "data", "hces",
@@ -232,7 +246,7 @@ The code below loads those exports and checks that nesstarR's CSV output matches
 
 ### Unzip the Stata archive
 
-```{r stata_unzip}
+```{r stata_unzip, eval=has_stata}
 # Extract alongside the .Nesstar output to avoid exhausting /tmp on
 # space-constrained machines (the full STATA archive expands to ~1.4 GB).
 stata_dir <- file.path(output_dir, "stata_68t2")
@@ -253,7 +267,7 @@ that string and join to the STATA export filenames — a structural match that
 is independent of any data property. If the metadata names do not carry level
 numbers we fall back to matching on unique `(nrow, ncol)` pairs.
 
-```{r stata_match}
+```{r stata_match, eval=has_stata}
 library(haven)
 
 level_num <- function(s) {
@@ -403,7 +417,7 @@ sides. `haven::zap_labels()` strips value-label attributes so numeric
 columns compare as plain doubles. Each dataset is freed from memory after
 comparison to limit peak usage.
 
-```{r stata_verify}
+```{r stata_verify, eval=has_stata}
 norm_col <- function(x) toupper(gsub("[. ]+", "_", trimws(x)))
 
 strip_stata <- function(x) {

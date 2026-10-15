@@ -16,6 +16,11 @@
 #'       \code{categories}).}
 #'   }
 #'   Returns \code{NULL} (with a warning) when metadata cannot be decoded.
+#' @examples
+#' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+#' x <- nesstar_parse(path)
+#' meta <- nesstar_metadata(x)
+#' meta$datasets[[1]]$variables[[1]]$label
 #' @export
 nesstar_metadata <- function(x) {
   stopifnot(inherits(x, "nesstar_binary"))

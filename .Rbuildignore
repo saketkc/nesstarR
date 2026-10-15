@@ -1,6 +1,12 @@
-
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^doc$
 ^Meta$
-^.\*.md
+^data-raw$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^cran-comments\.md$
+^CLAUDE\.md$
+^\.github$
+^\.claude$

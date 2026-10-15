@@ -173,7 +173,7 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
     const uint8_t *data = RAW(raw_bytes);
     size_t len = (size_t)XLENGTH(raw_bytes);
 
-    if (len < 8 || memcmp(data, "NESSTART", 8) != 0)
+    if (len < 0x33 || memcmp(data, "NESSTART", 8) != 0)
         error("Not a NESSTAR file: missing NESSTART magic");
 
     int le = detect_byte_order(data, len);
@@ -447,9 +447,30 @@ SEXP nesstar_decode_huffman(SEXP raw_bytes, SEXP r_offset, SEXP r_has_ds_idx) {
 
 /* Shared inner decoder: col points to the start of the column payload,
  * row_start is the first row index to emit, n_rows is the count to emit. */
-static SEXP decode_column_impl(const uint8_t *col, int mode, int fmt,
+static size_t bytes_per_row(int mode, int fmt, int width) {
+    if (mode == MODE_STRING) return (size_t)width;
+    switch (fmt) {
+        case FMT_BYTE:    return 1;
+        case FMT_UINT16:  return 2;
+        case FMT_UINT24:  return 3;
+        case FMT_UINT32:  return 4;
+        case FMT_UINT40:  return 5;
+        case FMT_FLOAT64: return 8;
+        default:          return 0; /* nibble handled by caller */
+    }
+}
+
+static SEXP decode_column_impl(const uint8_t *col, size_t col_len, int mode, int fmt,
                                 double off_i64, int width,
                                 int row_start, int n_rows) {
+    if (row_start < 0 || n_rows < 0) error("negative row range");
+    size_t end_row = (size_t)row_start + (size_t)n_rows;
+    size_t need = (mode == MODE_NUMERIC && fmt == FMT_NIBBLE)
+        ? (end_row + 1) / 2
+        : end_row * bytes_per_row(mode, fmt, width);
+    if (need > col_len)
+        error("column needs %zu bytes but its data region holds %zu", need, col_len);
+
     if (mode == MODE_STRING) {
         if (width <= 0) error("mode 1 variable has width_value <= 0");
         SEXP out = PROTECT(allocVector(STRSXP, n_rows));
@@ -553,7 +574,7 @@ SEXP nesstar_decode_column(SEXP raw_bytes, SEXP r_data_offset, SEXP r_data_len,
     if (col_off + col_len > file_len)
         error("column data region [%zu, %zu) exceeds file length %zu",
               col_off, col_off + col_len, file_len);
-    return decode_column_impl(data + col_off,
+    return decode_column_impl(data + col_off, col_len,
                               asInteger(r_mode), asInteger(r_fmt),
                               asReal(r_offset_i64), asInteger(r_width),
                               0, asInteger(r_row_count));
@@ -569,7 +590,7 @@ SEXP nesstar_decode_column_range(SEXP raw_bytes, SEXP r_data_offset, SEXP r_data
     if (col_off + col_len > file_len)
         error("column data region [%zu, %zu) exceeds file length %zu",
               col_off, col_off + col_len, file_len);
-    return decode_column_impl(data + col_off,
+    return decode_column_impl(data + col_off, col_len,
                               asInteger(r_mode), asInteger(r_fmt),
                               asReal(r_offset_i64), asInteger(r_width),
                               asInteger(r_row_start), asInteger(r_n_rows));
