@@ -1,7 +1,12 @@
-#' Parse a NESSTAR binary container
+#' Parse a Nesstar file
 #'
-#' Reads the file into memory and parses the binary layout (resource index,
-#' dataset descriptors, variable directories).
+#' Decodes the resource index, the dataset descriptors and the variable
+#' directories. Does not decode row data.
+#'
+#' The function does not keep the file in memory. The other functions read
+#' only the bytes that they need from the file. Thus, the memory use does not
+#' increase with the file size. Do not move or change the file while you use
+#' the result.
 #'
 #' @param path Path to a \code{.Nesstar} file.
 #' @return A \code{nesstar_binary} list (S3 class).
@@ -12,13 +17,16 @@
 #' @export
 nesstar_parse <- function(path) {
   path <- normalizePath(path, mustWork = TRUE)
-  raw <- readBin(path, what = "raw", n = file.info(path)$size)
-  parsed <- .Call("nesstar_parse_binary", raw)
+  parsed <- .Call(
+    "nesstar_parse_binary",
+    function(offset, n) .read_bytes(path, offset, n),
+    file.info(path)$size
+  )
   structure(
     list(
       path       = path,
-      raw        = raw,
       byte_order = parsed$byte_order,
+      resources  = parsed$resources,
       datasets   = parsed$datasets
     ),
     class = "nesstar_binary"
@@ -33,7 +41,7 @@ print.nesstar_binary <- function(x, ...) {
   invisible(x)
 }
 
-#' List datasets in a parsed NESSTAR container
+#' List the datasets in a Nesstar file
 #'
 #' @param x A \code{nesstar_binary} object from \code{\link{nesstar_parse}}.
 #' @return A data frame with columns \code{dataset_number}, \code{row_count},
@@ -61,8 +69,8 @@ nesstar_datasets <- function(x) {
 #' @param x A \code{nesstar_binary} object.
 #' @param dataset_number Integer dataset number (as shown by
 #'   \code{\link{nesstar_datasets}}).
-#' @return A data frame with one row per variable describing its storage
-#'   properties.
+#' @return A data frame with one row for each variable. The columns give the
+#'   storage format of the variable.
 #' @examples
 #' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
 #' x <- nesstar_parse(path)
@@ -89,13 +97,13 @@ nesstar_variables <- function(x, dataset_number) {
 
 #' Read one dataset into an R data frame
 #'
-#' Numeric columns (mode 5) become \code{numeric}; string columns (mode 1)
-#' become \code{character}.  Missing values are \code{NA}.
+#' Numeric columns (mode 5) become \code{numeric}. String columns (mode 1)
+#' become \code{character}. Missing values become \code{NA}.
 #'
 #' @param x A \code{nesstar_binary} object.
 #' @param dataset_number Integer dataset number.
-#' @param columns Optional character vector of column names to read.  When
-#'   \code{NULL} (default) all columns are returned.
+#' @param columns Character vector of the column names to read. If
+#'   \code{NULL} (the default), the function reads all columns.
 #' @return A \code{data.frame}.
 #' @examples
 #' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
@@ -116,24 +124,24 @@ nesstar_read_dataset <- function(x, dataset_number, columns = NULL) {
     }
   }
 
-  cols <- .decode_columns(x$raw, vars, ds$row_count)
+  cols <- .decode_columns(x$path, vars, ds$row_count)
   as.data.frame(cols, stringsAsFactors = FALSE, check.names = FALSE)
 }
 
-#' Export all datasets to CSV files
+#' Export datasets to CSV files
 #'
-#' Writes each dataset to a CSV file named after the container and dataset
-#' number.
+#' Writes each dataset to a different CSV file. The file name contains the
+#' name of the Nesstar file and the dataset number.
 #'
 #' @param x A \code{nesstar_binary} object.
-#' @param output_dir Directory to write files into.  Created if it does not
-#'   exist.
-#' @param datasets Integer vector of dataset numbers to export.  When
-#'   \code{NULL} (default) every dataset is exported.
-#' @param compress Logical; when \code{TRUE} (default) output files are
-#'   gzip-compressed (\code{.csv.gz}).
-#' @param chunk_size Number of rows to process per iteration (reduces peak
-#'   memory use).
+#' @param output_dir Directory for the output files. If the directory does
+#'   not exist, the function makes it.
+#' @param datasets Integer vector of the dataset numbers to export. If
+#'   \code{NULL} (the default), the function exports all datasets.
+#' @param compress Logical. If \code{TRUE} (the default), the function writes
+#'   gzip files (\code{.csv.gz}).
+#' @param chunk_size Number of rows to read at a time. A smaller value
+#'   decreases the memory use.
 #' @return Invisibly, a character vector of output file paths.
 #' @examples
 #' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
@@ -163,7 +171,6 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
     )
     vars <- ds$variables
     nrow <- ds$row_count
-    col_names <- vapply(vars, `[[`, character(1), "name")
 
     con <- if (compress) gzfile(out_path, "wt") else file(out_path, "wt")
     on.exit(try(close(con), silent = TRUE), add = TRUE)
@@ -172,11 +179,8 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
     row <- 0L
     while (row < nrow) {
       n_rows <- min(chunk_size, nrow - row)
-      chunk <- .decode_columns_range(x$raw, vars, row, n_rows, nrow)
-      df <- as.data.frame(
-        stats::setNames(chunk, col_names),
-        stringsAsFactors = FALSE, check.names = FALSE
-      )
+      chunk <- .decode_columns(x$path, vars, nrow, row, n_rows)
+      df <- as.data.frame(chunk, stringsAsFactors = FALSE, check.names = FALSE)
       utils::write.table(df,
         file = con, sep = ",", row.names = FALSE,
         col.names = first_chunk, na = "",
@@ -208,83 +212,42 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
   )
 }
 
-# Resolve the true mode for a mode_code=0 variable by checking whether
-# data_length matches mode 5 (numeric) or mode 1 (fixed-width string).
-# Some older NSS files write mode_code=0 for both numeric columns (e.g.
-# Subsample_multiplier, value_format_code=10/float64) and string columns
-# (e.g. HH_Type_code, value_format_code=2/nibble but stored as 2-byte ASCII).
-# The data_length is the definitive discriminator:
-#   mode 5 expected bytes: nibble=ceil(n/2), byte=n, u16=2n, ..., f64=8n
-#   mode 1 expected bytes: n * width_value
-.resolve_mode0 <- function(v, total_nrow) {
-  mode5_bytes <- switch(as.character(v$value_format_code),
-    "2"  = (total_nrow + 1L) %/% 2L, # FMT_NIBBLE: 4 bits/row
-    "3"  = total_nrow, # FMT_BYTE
-    "4"  = total_nrow * 2L, # FMT_UINT16
-    "5"  = total_nrow * 3L, # FMT_UINT24
-    "6"  = total_nrow * 4L, # FMT_UINT32
-    "7"  = total_nrow * 5L, # FMT_UINT40
-    "10" = total_nrow * 8L, # FMT_FLOAT64
-    NA_integer_
-  )
-  if (!is.na(mode5_bytes) && v$data_length == mode5_bytes) 5L else 1L
-}
-
-.decode_columns <- function(raw, vars, nrow) {
-  cols <- vector("list", length(vars))
-  names(cols) <- vapply(vars, `[[`, character(1), "name")
-  for (i in seq_along(vars)) {
-    v <- vars[[i]]
-    effective_mode <- if (v$mode_code == 0L && v$data_length > 0L) {
-      .resolve_mode0(v, nrow)
-    } else {
-      v$mode_code
-    }
-    if (v$data_length == 0L || !effective_mode %in% c(1L, 5L)) {
-      cols[[i]] <- if (effective_mode == 1L) character(nrow) else rep(NA_real_, nrow)
-      next
-    }
-    cols[[i]] <- .Call(
-      "nesstar_decode_column",
-      raw,
-      v$data_offset,
-      v$data_length,
-      effective_mode,
-      v$value_format_code,
-      v$value_offset_i64,
-      v$width_value,
-      nrow
-    )
+# Read n bytes at the 0-based offset of the file.
+.read_bytes <- function(path, offset, n) {
+  con <- file(path, "rb")
+  on.exit(close(con))
+  seek(con, offset)
+  bytes <- readBin(con, "raw", n)
+  if (length(bytes) != n) {
+    stop("Could not read ", n, " bytes at offset ", offset, " of ", path)
   }
-  cols
+  bytes
 }
 
-# total_nrow is needed to resolve mode_code=0 variables.
-.decode_columns_range <- function(raw, vars, row_start, n_rows, total_nrow) {
-  cols <- vector("list", length(vars))
-  for (i in seq_along(vars)) {
-    v <- vars[[i]]
-    effective_mode <- if (v$mode_code == 0L && v$data_length > 0L) {
-      .resolve_mode0(v, total_nrow)
-    } else {
-      v$mode_code
+# Decode rows row_start to row_start + n_rows - 1 (0-based) of each variable.
+# The C decoder reads only the bytes of these rows. total_nrow is needed to
+# resolve mode_code=0 variables.
+.decode_columns <- function(path, vars, total_nrow,
+                            row_start = 0L, n_rows = total_nrow) {
+  read <- function(offset, n) .read_bytes(path, offset, n)
+  cols <- lapply(vars, function(v) {
+    if (v$data_length == 0 || !v$mode_code %in% c(0L, 1L, 5L)) {
+      return(if (v$mode_code == 1L) character(n_rows) else rep(NA_real_, n_rows))
     }
-    if (v$data_length == 0L || !effective_mode %in% c(1L, 5L)) {
-      cols[[i]] <- if (effective_mode == 1L) character(n_rows) else rep(NA_real_, n_rows)
-      next
-    }
-    cols[[i]] <- .Call(
+    .Call(
       "nesstar_decode_column_range",
-      raw,
+      read,
       v$data_offset,
       v$data_length,
-      effective_mode,
+      v$mode_code,
       v$value_format_code,
       v$value_offset_i64,
       v$width_value,
-      row_start,
-      n_rows
+      as.integer(total_nrow),
+      as.integer(row_start),
+      as.integer(n_rows)
     )
-  }
+  })
+  names(cols) <- vapply(vars, `[[`, character(1), "name")
   cols
 }

@@ -1,525 +1,97 @@
 ---
-title: "Reading NESSTAR survey data with nesstarR"
+title: "Get started with nesstarR"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Reading NESSTAR survey data with nesstarR}
+  %\VignetteIndexEntry{Get started with nesstarR}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
-
-mospi_data <- {
-  env <- Sys.getenv("MOSPI_DATA", unset = "")
-  if (nzchar(env)) {
-    normalizePath(env, mustWork = FALSE)
-  } else {
-    # Sibling-repo default: nesstarR/ and mospiR/ sit next to each other
-    normalizePath(file.path("..", "..", "mospiR", "data", "hces"),
-      mustWork = FALSE
-    )
-  }
-}
-
-nesstar_path <- file.path(
-  mospi_data,
-  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012",
-  "Nss68_1.0_Type2_new format",
-  "survey0", "data",
-  "nss68_consumer_expenditure_type2.Nesstar"
-)
-
-stata_zip <- normalizePath(
-  file.path("..", "stata", "Nss68_STATA_2012.zip"),
-  mustWork = FALSE
-)
-
-# The NSS microdata cannot be redistributed, so chunks only run when the files
-# are available locally (never on CRAN).
-has_data <- file.exists(nesstar_path)
-has_stata <- has_data && file.exists(stata_zip) &&
-  requireNamespace("haven", quietly = TRUE)
-knitr::opts_chunk$set(eval = has_data)
 ```
 
-```{r no-data, eval=!has_data, echo=FALSE, results="asis"}
-cat(
-  "> The NSS 68 data files were not found when this vignette was built, so",
-  "the code below is shown without output. Set `MOSPI_DATA` to run it.\n"
-)
-```
+`.Nesstar` is the file format of Nesstar Publisher. Nesstar Publisher is
+survey documentation software from the
+[International Household Survey Network (IHSN)](https://www.ihsn.org/node/557).
+Statistical agencies, for example the Ministry of Statistics and Programme
+Implementation (MoSPI), India, publish survey microdata in this format.
+nesstarR reads these files in R. You do not need Nesstar software.
 
-[NSS rounds 64, 66, and 68](https://microdata.gov.in/NADA/index.php/catalog/?page=1&sort_order=desc&ps=15) come as `.Nesstar` binaries inside `.rar` archives.
-Download them with the sister package [mospiR](https://github.com/saketkc/mospiR), extract with
-`unar`, and read with nesstarR. All examples below use NSS 68th Round Type 2
-(Consumer Expenditure Survey, July 2011 - June 2012); the same steps apply to
-NSS 64 and 66.
-
-## Prerequisites
-
-```{r install, eval=FALSE}
-remotes::install_github("saketkc/mospiR")
-remotes::install_github("saketkc/nesstarR")
-```
+This vignette uses a small synthetic file that comes with the package.
+For an example with real survey data, refer to the article "Read NSS 68
+data from the MoSPI portal" on the
+[package website](https://nesstarr.saketlab.org).
 
 ```{r libs}
 library(nesstarR)
 ```
 
-## Download from the portal
+## Parse the file
 
-`mospiR::download_dataset()` authenticates with the MoSPI NADA API and
-downloads the full archive for one survey idno. The API key is read from
-`MOSPI_KEY` (set it in `~/.Renviron`).
-
-```{r download, eval=FALSE}
-library(mospiR)
-api_key <- Sys.getenv("MOSPI_KEY")
-data_dir <- file.path(
-  "data", "hces",
-  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012"
-)
-
-download_dataset(
-  "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012",
-  data_dir,
-  api_key
-)
-```
-
-The download is a `.rar` archive, around 270 MB for NSS 68 T2.
-
-## Extract the archive
-
-`unar` (macOS/Linux) and `unrar` (Windows) both work. Either must be on your
-`PATH`.
-
-```{r extract, eval=FALSE}
-rar_file <- file.path(data_dir, "Nss68_1.0_Type2_new format.rar")
-system2("unar", c("-o", dirname(rar_file), shQuote(rar_file)))
-```
-
-Extraction produces a folder containing:
-
-- `survey0/data/nss68_consumer_expenditure_type2.Nesstar` (the binary data)
-- `ddi.xml` (variable metadata in DDI format, not required by nesstarR)
-- `Readme.pdf` / supporting documents
-
-## Parse the Nesstar file
-
-`nesstar_parse()` reads the entire file into memory and decodes the binary
-header, resource index, dataset descriptors, and variable directories. No row
-data is loaded at this stage.
+`nesstar_parse()` decodes the resource index, the dataset descriptors and
+the variable directories. It does not decode row data, and it does not keep
+the file in memory. The other functions read only the bytes that they need
+from the file.
 
 ```{r parse}
-nb <- nesstar_parse(nesstar_path)
-nb
+path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
+x <- nesstar_parse(path)
+x
 ```
 
-## Dataset structure
+## List the datasets and variables
 
-A single `.Nesstar` container holds multiple datasets, one per schedule
-block (household, person, food, non-food, …).
+One `.Nesstar` file can contain many datasets. `nesstar_datasets()` gives the
+number of rows and variables in each dataset.
 
 ```{r datasets}
-ds_tbl <- nesstar_datasets(nb)
-ds_tbl
+nesstar_datasets(x)
 ```
 
-The dataset with the largest row count is the food block: one row per
-household × item combination (~4-5 million rows for NSS 68 T2).
-
-```{r food_ds}
-food_ds <- ds_tbl$dataset_number[which.max(ds_tbl$row_count)]
-cat("Food block dataset number:", food_ds, "\n")
-cat("Rows:", ds_tbl$row_count[ds_tbl$dataset_number == food_ds], "\n")
-```
-
-## Variable listing
+`nesstar_variables()` gives the storage format of each variable in one
+dataset. Mode 5 is a numeric variable. Mode 1 is a string variable.
 
 ```{r variables}
-vars <- nesstar_variables(nb, dataset_number = food_ds)
-vars[, c("name", "mode_code", "value_format_code", "width_value")]
+nesstar_variables(x, dataset_number = 1)
 ```
-
-## Embedded labels and category codes
-
-NESSTAR files from NSS 64 onwards embed Huffman-compressed XML blocks with
-variable labels and category codes.
-
-```{r metadata}
-meta <- nesstar_metadata(nb)
-if (!is.null(meta)) {
-  ds_meta <- meta$datasets[[which(
-    vapply(meta$datasets, `[[`, integer(1), "dataset_number") == food_ds
-  )]]
-  cat("File name stored in container:", ds_meta$file_name, "\n\n")
-
-  for (v in head(ds_meta$variables, 6)) {
-    cat(sprintf("%-20s  label: %s\n", v$name, v$label))
-    if (length(v$categories) > 0) {
-      for (cat_entry in head(v$categories, 4)) {
-        cat(sprintf("  %s = %s\n", cat_entry$value, cat_entry$label))
-      }
-    }
-  }
-} else {
-  message("Metadata not available for this file (older NSS format).")
-}
-```
-
 
 ## Read a dataset
 
-`nesstar_read_dataset()` decodes all columns for the requested dataset.
-For the food block this is the slow step (~10-30 s on a laptop): 4–5 million
-rows × ~20 columns, decoded from the packed binary format.
-
-Pass `columns` to load only what you need:
+`nesstar_read_dataset()` decodes one dataset into a data frame. Missing
+values become `NA`.
 
 ```{r read}
-food <- nesstar_read_dataset(
-  nb,
-  dataset_number = food_ds,
-  columns = c(
-    "HHID", "State_code", "District_Code", "Sector",
-    "Combined_Multiplier", "Item_Code", "Total_Consumption_Value"
-  )
-)
-cat("Rows:", nrow(food), "| Columns:", ncol(food), "\n")
-head(food)
+nesstar_read_dataset(x, dataset_number = 1)
 ```
 
-## Quick check: cereal spending by sector
+To decode only some columns, use the `columns` argument.
 
-Weighted mean monthly household expenditure on cereals (item codes 101–140),
-rural vs. urban. The `Multiplier` column is the survey weight.
-
-```{r cereals}
-cereals <- food[as.integer(food$Item_Code) >= 101 &
-  as.integer(food$Item_Code) <= 140, ]
-hh_cereals <- aggregate(Total_Consumption_Value ~ HHID + Sector + Combined_Multiplier,
-  data = cereals, FUN = sum
-)
-
-rural <- hh_cereals[hh_cereals$Sector == "1", ]
-urban <- hh_cereals[hh_cereals$Sector == "2", ]
-
-cat(sprintf(
-  "Weighted mean cereal expenditure (Rs/month):\n  Rural: %.0f\n  Urban: %.0f\n",
-  weighted.mean(rural$Total_Consumption_Value, rural$Combined_Multiplier, na.rm = TRUE),
-  weighted.mean(urban$Total_Consumption_Value, urban$Combined_Multiplier, na.rm = TRUE)
-))
+```{r read-columns}
+nesstar_read_dataset(x, dataset_number = 1, columns = c("AGE", "NAME"))
 ```
 
-## Export to csv
+## Read the labels
 
-`nesstar_export()` writes one CSV (or `.csv.gz`) per dataset to a directory.
-It processes 50,000 rows per chunk by default, so even the 4.65 GB T1 file
-does not require loading all rows at once.
+Many `.Nesstar` files contain XML blocks with variable labels and category
+codes. `nesstar_metadata()` decodes these blocks.
+
+```{r metadata}
+meta <- nesstar_metadata(x)
+meta$datasets[[1]]$variables[[1]]
+```
+
+Some older files do not contain these blocks. For these files,
+`nesstar_metadata()` gives a warning and returns `NULL`.
+
+## Export to CSV
+
+`nesstar_export()` writes each dataset to a different CSV file. By default,
+it reads 50,000 rows at a time and writes gzip files. Thus, the memory use
+stays low for large files.
 
 ```{r export}
-# Write CSVs alongside the .Nesstar file so they survive across R sessions
-# and avoid filling /tmp on machines with limited temporary storage.
-output_dir <- dirname(nesstar_path)
-nesstar_export(nb, output_dir = output_dir, compress = FALSE)
-list.files(output_dir, pattern = "\\.csv$")
+out <- nesstar_export(x, output_dir = tempdir())
+basename(out)
+read.csv(out[1])
 ```
-
-Pass `compress = TRUE` (the default) for gzip-compressed output, which
-typically halves file size with negligible extra time.
-
-```{r export_subset, eval=FALSE}
-nesstar_export(nb,
-  output_dir = output_dir,
-  datasets   = food_ds,
-  compress   = TRUE,
-  chunk_size = 100000L
-)
-```
-
-## Verify against Stata reference files
-
-The original NESSTAR Publisher software was used to export each dataset to Stata `.dta` format.
-The code below loads those exports and checks that nesstarR's CSV output matches them row-for-row.
-
-### Unzip the Stata archive
-
-```{r stata_unzip, eval=has_stata}
-# Extract alongside the .Nesstar output to avoid exhausting /tmp on
-# space-constrained machines (the full STATA archive expands to ~1.4 GB).
-stata_dir <- file.path(output_dir, "stata_68t2")
-unzip(stata_zip, exdir = stata_dir)
-dta_files <- sort(list.files(stata_dir,
-  pattern = "\\.dta$",
-  full.names = TRUE, recursive = TRUE
-))
-cat(length(dta_files), "Stata files found\n")
-```
-
-### Build the dataset correspondence table
-
-The NESSTAR container stores a file name for every dataset in its embedded
-metadata (`<FileName>` XML field decoded by `nesstar_metadata()`). For NSS
-files this is something like `Level_1.sav`. We extract the level number from
-that string and join to the STATA export filenames — a structural match that
-is independent of any data property. If the metadata names do not carry level
-numbers we fall back to matching on unique `(nrow, ncol)` pairs.
-
-```{r stata_match, eval=has_stata}
-library(haven)
-
-level_num <- function(s) {
-  if (is.na(s) || !nzchar(s)) {
-    return(NA_integer_)
-  }
-  m <- regexpr("[Ll]evel[[:space:]_-]*(\\d+)", s, perl = TRUE)
-  if (m[[1L]] == -1L) {
-    return(NA_integer_)
-  }
-  cs <- attr(m, "capture.start")[[1L]]
-  cl <- attr(m, "capture.length")[[1L]]
-  as.integer(substr(s, cs, cs + cl - 1L))
-}
-
-# Reuse metadata from earlier chunk; older containers return NULL, in which
-# case every ds$level stays NA and we fall back to (nrow, ncol) matching.
-if (!exists("meta")) meta <- nesstar_metadata(nb)
-nesstar_ds <- if (!is.null(meta)) {
-  do.call(rbind, lapply(meta$datasets, function(dm) {
-    data.frame(
-      ds_num = dm$dataset_number,
-      file_name = dm$file_name,
-      level = level_num(dm$file_name),
-      stringsAsFactors = FALSE
-    )
-  }))
-} else {
-  cat("No embedded XML metadata — falling back to (nrow, ncol) matching.\n")
-  data.frame(
-    ds_num = vapply(nb$datasets, `[[`, integer(1), "dataset_number"),
-    file_name = NA_character_,
-    level = NA_integer_,
-    stringsAsFactors = FALSE
-  )
-}
-if (!is.null(meta)) {
-  print(nesstar_ds[, c("ds_num", "file_name", "level")])
-}
-
-dta_nobs <- function(path) {
-  raw <- readBin(path, "raw", n = 512L)
-  if (length(raw) < 10L) {
-    return(NA_integer_)
-  }
-  ver <- as.integer(raw[1L])
-  if (ver %in% c(102L, 108L, 110L, 113L, 114L, 115L)) {
-    bo <- if (as.integer(raw[2L]) == 1L) "big" else "little"
-    return(readBin(raw[7L:10L], "integer", n = 1L, size = 4L, endian = bo))
-  }
-  lt <- as.raw(0x3c)
-  Nb <- as.raw(0x4e)
-  for (i in seq_len(length(raw) - 4L)) {
-    if (raw[i] == lt && raw[i + 1L] == Nb && raw[i + 2L] == as.raw(0x3e)) {
-      return(readBin(raw[(i + 3L):(i + 6L)], "integer",
-        n = 1L, size = 4L,
-        endian = "little"
-      ))
-    }
-  }
-  NA_integer_
-}
-
-stata_ds <- do.call(rbind, lapply(dta_files, function(f) {
-  df <- read_dta(f, n_max = 0L)
-  data.frame(
-    stata_path = f,
-    level = level_num(basename(f)),
-    nrow = dta_nobs(f),
-    ncol = ncol(df),
-    stringsAsFactors = FALSE
-  )
-}))
-
-csv_files <- sort(list.files(output_dir,
-  pattern = "_ds\\d+\\.csv$",
-  full.names = TRUE
-))
-csv_meta <- lapply(csv_files, function(f) {
-  hdr <- names(read.csv(f, nrows = 0L, check.names = FALSE))
-  wc_out <- system(paste("wc -l", shQuote(f)), intern = TRUE)
-  nrows <- as.integer(sub("^\\s*(\\d+).*", "\\1", wc_out)) - 1L
-  ds_num <- as.integer(sub(".*_ds(\\d+)\\.csv$", "\\1", basename(f)))
-  list(ds_num = ds_num, path = f, nrow = nrows, ncol = length(hdr))
-})
-
-match_tbl <- data.frame(
-  level = integer(), ds_num = integer(),
-  csv_path = character(), stata_path = character(), method = character(),
-  stringsAsFactors = FALSE
-)
-
-for (i in seq_len(nrow(stata_ds))) {
-  sd <- stata_ds[i, ]
-
-  nm <- nesstar_ds[!is.na(nesstar_ds$level) & nesstar_ds$level == sd$level, ]
-  if (nrow(nm) == 1L) {
-    csv_f <- Filter(function(cm) cm$ds_num == nm$ds_num, csv_meta)
-    if (length(csv_f) == 1L) {
-      match_tbl <- rbind(match_tbl, data.frame(
-        level = sd$level, ds_num = nm$ds_num,
-        csv_path = csv_f[[1L]]$path, stata_path = sd$stata_path,
-        method = "metadata", stringsAsFactors = FALSE
-      ))
-      next
-    }
-  }
-
-  taken <- match_tbl$ds_num
-  cands <- Filter(function(cm) {
-    !cm$ds_num %in% taken &&
-      cm$nrow == sd$nrow
-  }, csv_meta)
-  if (length(cands) > 1L) {
-    cands <- Filter(function(cm) cm$ncol == sd$ncol, cands)
-  }
-  if (length(cands) == 1L) {
-    match_tbl <- rbind(match_tbl, data.frame(
-      level = sd$level, ds_num = cands[[1L]]$ds_num,
-      csv_path = cands[[1L]]$path, stata_path = sd$stata_path,
-      method = "row+col", stringsAsFactors = FALSE
-    ))
-  } else {
-    cat(sprintf(
-      "Level %2d: COULD NOT MATCH (nrow=%d, ncol=%d)\n",
-      sd$level, sd$nrow, sd$ncol
-    ))
-  }
-}
-
-match_tbl <- match_tbl[order(match_tbl$level), ]
-cat(sprintf("\n%d / %d STATA levels matched:\n", nrow(match_tbl), nrow(stata_ds)))
-for (i in seq_len(nrow(match_tbl))) {
-  r <- match_tbl[i, ]
-  cat(sprintf(
-    "  Level %2d -> ds%02d  [%-8s]  %s\n",
-    r$level, r$ds_num, r$method, basename(r$csv_path)
-  ))
-}
-```
-
-### Full dataset verification
-
-Load every matched pair completely and compare all rows and all columns.
-STATA converts `.` to `_` in variable names; `norm_col()` normalises both
-sides. `haven::zap_labels()` strips value-label attributes so numeric
-columns compare as plain doubles. Each dataset is freed from memory after
-comparison to limit peak usage.
-
-```{r stata_verify, eval=has_stata}
-norm_col <- function(x) toupper(gsub("[. ]+", "_", trimws(x)))
-
-strip_stata <- function(x) {
-  if (inherits(x, c("haven_labelled", "haven_labelled_spss"))) {
-    return(as.numeric(unclass(x)))
-  }
-  if (is.factor(x)) {
-    return(as.character(x))
-  }
-  x
-}
-
-pass_all <- TRUE
-
-for (i in seq_len(nrow(match_tbl))) {
-  r <- match_tbl[i, ]
-
-  s_df <- tryCatch(
-    as.data.frame(zap_labels(read_dta(r$stata_path))),
-    error = function(e) {
-      cat(sprintf(
-        "Level %2d / ds%02d: SKIP  (STATA read error: %s)\n",
-        r$level, r$ds_num, conditionMessage(e)
-      ))
-      NULL
-    }
-  )
-  if (is.null(s_df)) {
-    pass_all <- FALSE
-    next
-  }
-  c_df <- read.csv(r$csv_path, check.names = FALSE)
-
-  names(s_df) <- norm_col(names(s_df))
-  names(c_df) <- norm_col(names(c_df))
-
-  if (nrow(s_df) != nrow(c_df)) {
-    cat(sprintf(
-      "Level %2d / ds%02d: FAIL  row count STATA=%d  CSV=%d\n",
-      r$level, r$ds_num, nrow(s_df), nrow(c_df)
-    ))
-    pass_all <- FALSE
-    rm(s_df, c_df)
-    gc(verbose = FALSE)
-    next
-  }
-
-  only_s <- setdiff(names(s_df), names(c_df))
-  only_c <- setdiff(names(c_df), names(s_df))
-  common <- intersect(names(s_df), names(c_df))
-
-  # Zero-padded survey codes (e.g. "010") lose leading zeros through
-  # read.csv(); compare numerically when both sides are numeric-convertible.
-  col_fail <- character(0)
-  for (col in common) {
-    sv <- strip_stata(s_df[[col]])
-    cv <- c_df[[col]]
-    sv_c <- trimws(as.character(sv))
-    cv_c <- trimws(as.character(cv))
-    sv_n <- suppressWarnings(as.numeric(sv_c))
-    cv_n <- suppressWarnings(as.numeric(cv_c))
-    sv_was_na <- is.na(sv_c) | sv_c == ""
-    cv_was_na <- is.na(cv_c) | cv_c == ""
-    if (sum(is.na(sv_n) & !sv_was_na) == 0L &&
-      sum(is.na(cv_n) & !cv_was_na) == 0L) {
-      n_diff <- sum(abs(sv_n - cv_n) > 1e-9, na.rm = TRUE) +
-        sum(xor(is.na(sv_n), is.na(cv_n)))
-    } else {
-      n_diff <- sum(sv_c != cv_c, na.rm = TRUE) +
-        sum(xor(is.na(sv_c), is.na(cv_c)))
-    }
-    if (n_diff > 0L) col_fail <- c(col_fail, sprintf("%s(%d)", col, n_diff))
-  }
-
-  if (length(col_fail) == 0L) {
-    cat(sprintf(
-      "Level %2d / ds%02d: PASS  %7d rows x %d cols\n",
-      r$level, r$ds_num, nrow(s_df), length(common)
-    ))
-  } else {
-    pass_all <- FALSE
-    cat(sprintf(
-      "Level %2d / ds%02d: FAIL  %7d rows x %d cols | diffs: %s\n",
-      r$level, r$ds_num, nrow(s_df), length(common),
-      paste(col_fail, collapse = ", ")
-    ))
-  }
-  if (length(only_s) > 0L) {
-    cat(sprintf("         only in STATA: %s\n", paste(only_s, collapse = ", ")))
-  }
-  if (length(only_c) > 0L) {
-    cat(sprintf("         only in CSV:   %s\n", paste(only_c, collapse = ", ")))
-  }
-
-  rm(s_df, c_df)
-  gc(verbose = FALSE)
-}
-
-if (pass_all) {
-  cat("\n==> ALL LEVELS PASS: nesstarR output is identical to the STATA reference export.\n")
-} else {
-  cat("\n==> Failures detected — see details above.\n")
-}
-```
-

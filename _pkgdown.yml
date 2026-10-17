@@ -1,23 +1,83 @@
-url: https://saket-choudhary.me/nesstarR/
+url: https://nesstarr.saketlab.org
 
 template:
   bootstrap: 5
+  light-switch: true
+  preset: default
+  bslib:
+    primary: "#c07828"
+    secondary: "#6b7689"
+    body-bg: "#f8f7f9"
+    body-color: "#171923"
+    border-color: "#dcdae0"
+    border-radius: "6px"
+    font-size-base: "1rem"
+    headings-font-weight: "700"
+    base_font: {google: "Albert Sans"}
+    heading_font: {google: "Albert Sans"}
+    code_font: {google: "JetBrains Mono"}
+  includes:
+    in_header: |
+      <script>
+        (function(){
+          var stored = localStorage.getItem('bs-color-scheme');
+          if (!stored) {
+            stored = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.setAttribute('data-bs-theme', stored);
+        })();
+      </script>
+      <meta name="author" content="Saket Choudhary">
+      <meta property="og:type" content="website">
+      <meta property="og:title" content="nesstarR - Read Nesstar Files in R">
+      <meta property="og:description" content="Read .Nesstar survey files into R data frames and export them to CSV.">
+      <meta property="og:site_name" content="nesstarR">
+
+home:
+  title: "nesstarR - Read Nesstar Files in R"
 
 navbar:
   structure:
-    left:  [intro, reference, articles]
-    right: [search, github]
+    left:  [reference, articles]
+    right: [search, github, lightswitch]
   components:
+    articles:
+      text: Articles
+      menu:
+      - text: "Get started with nesstarR"
+        href: articles/nesstarR.html
+      - text: "Read NSS 68 data from the MoSPI portal"
+        href: articles/nss68.html
     github:
-      icon: fab fa-github
+      icon: fab fa-github fa-lg
       href: https://github.com/saketkc/nesstarR
       aria-label: GitHub
 
-home:
-  title: "nesstarR"
-  description: "Read and export NESSTAR binary survey data containers"
+reference:
+- title: "Read data"
+  contents:
+  - nesstar_parse
+  - nesstar_datasets
+  - nesstar_variables
+  - nesstar_read_dataset
+- title: "Metadata"
+  contents:
+  - nesstar_metadata
+- title: "Export data"
+  contents:
+  - nesstar_export
+- title: "Check data"
+  contents:
+  - nesstar_compare
 
-articles:
-  - title: "Getting started"
-    contents:
-      - nesstarR
+authors:
+  Saket Choudhary:
+    href: https://github.com/saketkc
+
+footer:
+  structure:
+    left: developed_by
+    right: built_with
+  components:
+    developed_by: "Developed by [Saket Choudhary](https://saketlab.org)"
+    built_with: "Built with [pkgdown](https://pkgdown.r-lib.org/)"

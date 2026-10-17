@@ -11,15 +11,15 @@ nesstar_read_dataset(x, dataset_number, columns = NULL)
 
 \item{dataset_number}{Integer dataset number.}
 
-\item{columns}{Optional character vector of column names to read.  When
-\code{NULL} (default) all columns are returned.}
+\item{columns}{Character vector of the column names to read. If
+\code{NULL} (the default), the function reads all columns.}
 }
 \value{
 A \code{data.frame}.
 }
 \description{
-Numeric columns (mode 5) become \code{numeric}; string columns (mode 1)
-become \code{character}.  Missing values are \code{NA}.
+Numeric columns (mode 5) become \code{numeric}. String columns (mode 1)
+become \code{character}. Missing values become \code{NA}.
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

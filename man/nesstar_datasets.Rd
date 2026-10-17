@@ -2,7 +2,7 @@
 % Please edit documentation in R/nesstar.R
 \name{nesstar_datasets}
 \alias{nesstar_datasets}
-\title{List datasets in a parsed NESSTAR container}
+\title{List the datasets in a Nesstar file}
 \usage{
 nesstar_datasets(x)
 }
@@ -14,7 +14,7 @@ A data frame with columns \code{dataset_number}, \code{row_count},
   \code{variable_count}.
 }
 \description{
-List datasets in a parsed NESSTAR container
+List the datasets in a Nesstar file
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

@@ -1,0 +1,252 @@
+---
+title: "Read NSS 68 data from the MoSPI portal"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+
+# pkgdown renders from vignettes/articles/, so the data goes to vignettes/articles/data
+id <- "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012"
+data_dir <- file.path("data", id)
+rar_file <- file.path(data_dir, "Nss68_1.0_Type2_new format.rar")
+stata_zip <- file.path(
+  data_dir, "STATA_data_nss68_consumer_expenditure_type2.zip"
+)
+have_files <- file.exists(rar_file) && file.exists(stata_zip)
+knitr::opts_chunk$set(eval = have_files || nzchar(Sys.getenv("MOSPI_KEY")))
+```
+
+```{r no-key, eval=!knitr::opts_chunk$get("eval"), echo=FALSE, results="asis"}
+cat(
+  "> There was no `MOSPI_KEY` when this article was built.",
+  "Thus, the article shows the code without output.\n"
+)
+```
+
+This article uses the Household Consumer Expenditure Survey of NSS round 68
+(July 2011 to June 2012), Schedule 1.0 Type 2.
+We do these steps:
+
+1. Download the `.rar` archive and the Stata files with
+   [mospiR](https://mospir.saketlab.org).
+2. Extract the `.Nesstar` file from the archive.
+3. Read the `.Nesstar` file with nesstarR.
+4. Calculate the mean household expenditure on cereals.
+5. Compare each dataset with the Stata file from the portal.
+
+The packages mospiR, archive and haven do the download, the extraction and
+the Stata import.
+
+## Download the files
+
+You must have an API key for the
+[MoSPI Microdata Portal](https://microdata.gov.in).
+Set the environment variable `MOSPI_KEY` in `~/.Renviron`.
+
+The dataset has 27 files. We download only two files:
+
+- `Nss68_1.0_Type2_new format.rar` (67 MB) contains the `.Nesstar` file.
+- `STATA_data_nss68_consumer_expenditure_type2.zip` (151 MB) contains the
+  same data as Stata files.
+
+```{r download, eval=FALSE}
+library(mospiR)
+api_key <- Sys.getenv("MOSPI_KEY")
+id <- "DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012"
+data_dir <- file.path("data", id)
+
+files <- list_files(id, api_key)
+for (f in c(
+  "Nss68_1.0_Type2_new format.rar",
+  "STATA_data_nss68_consumer_expenditure_type2.zip"
+)) {
+  download_file(id, f, data_dir, api_key, .files_cache = files)
+}
+```
+
+```{r download-if-missing, ref.label="download", include=FALSE, eval=!have_files && nzchar(Sys.getenv("MOSPI_KEY"))}
+```
+
+## Extract the archive
+
+`archive::archive_extract()` extracts `.rar` archives on all platforms.
+The archive contains the `.Nesstar` file, a DDI XML file and documents.
+
+```{r extract}
+nesstar_dir <- file.path(data_dir, "nesstar")
+if (!dir.exists(nesstar_dir)) {
+  archive::archive_extract(
+    file.path(data_dir, "Nss68_1.0_Type2_new format.rar"),
+    dir = nesstar_dir
+  )
+}
+nesstar_path <- list.files(nesstar_dir,
+  pattern = "[.]Nesstar$",
+  recursive = TRUE, full.names = TRUE
+)
+basename(nesstar_path)
+file.size(nesstar_path) / 1e9
+```
+
+The `.Nesstar` file is approximately 1.5 GB.
+
+## Parse the file
+
+`nesstar_parse()` decodes the resource index, the dataset descriptors and
+the variable directories. It does not decode row data, and it does not keep
+the file in memory. The other functions read only the bytes that they need
+from the file.
+
+```{r parse}
+library(nesstarR)
+nb <- nesstar_parse(nesstar_path)
+nb
+```
+
+## List the datasets
+
+The file has one dataset for each level of the schedule.
+
+```{r datasets}
+ds_tbl <- nesstar_datasets(nb)
+ds_tbl
+```
+
+## Read the labels
+
+This file does not contain the XML blocks with the labels.
+Thus, `nesstar_metadata()` gives a warning and returns `NULL`.
+The labels are in the file `ddi.xml` in the archive.
+
+```{r metadata}
+meta <- nesstar_metadata(nb)
+is.null(meta)
+```
+
+## Read the item-level dataset
+
+The dataset with the most rows has one row for each household and item.
+
+```{r items}
+item_ds <- ds_tbl$dataset_number[which.max(ds_tbl$row_count)]
+nesstar_variables(nb, dataset_number = item_ds)$name
+```
+
+To decode only some columns, use the `columns` argument.
+
+```{r read}
+items <- nesstar_read_dataset(
+  nb,
+  dataset_number = item_ds,
+  columns = c(
+    "HHID", "Sector", "Item_Code",
+    "Total_Consumption_Value", "Combined_Multiplier"
+  )
+)
+dim(items)
+head(items)
+```
+
+## Calculate the expenditure on cereals
+
+Item code 129 is the sub-total for cereals (item codes 101 to 122).
+`Total_Consumption_Value` is in rupees.
+`Combined_Multiplier` is the household weight.
+In `Sector`, 1 is rural and 2 is urban.
+
+Some households have no row for item 129. For these households, the
+expenditure on cereals is 0.
+
+```{r cereals}
+hh <- items[!duplicated(items$HHID), c("HHID", "Sector", "Combined_Multiplier")]
+cereals <- items[items$Item_Code == "129", c("HHID", "Total_Consumption_Value")]
+hh <- merge(hh, cereals, by = "HHID", all.x = TRUE)
+hh$Total_Consumption_Value[is.na(hh$Total_Consumption_Value)] <- 0
+
+nrow(hh)
+weighted_total <- rowsum(hh$Total_Consumption_Value * hh$Combined_Multiplier, hh$Sector)
+weight <- rowsum(hh$Combined_Multiplier, hh$Sector)
+round(weighted_total / weight, 1)
+```
+
+## Export to CSV
+
+`nesstar_export()` writes each dataset to a different CSV file. By default,
+it reads 50,000 rows at a time and writes gzip files.
+This example writes only the first dataset.
+
+```{r export}
+out <- nesstar_export(nb,
+  output_dir = tempdir(),
+  datasets = ds_tbl$dataset_number[1]
+)
+basename(out)
+```
+
+```{r cleanup-items, include=FALSE}
+rm(items, hh, cereals)
+invisible(gc())
+```
+
+## Compare with the Stata files
+
+The portal also supplies the data as Stata files.
+We compare each Stata file with the related dataset in the `.Nesstar` file.
+The file has no labels, so we cannot match the datasets by name.
+Thus, we match each Stata file to the dataset with the same number of rows
+and columns.
+
+```{r stata-unzip}
+stata_dir <- file.path(data_dir, "stata")
+if (!dir.exists(stata_dir)) unzip(stata_zip, exdir = stata_dir)
+dta_files <- list.files(stata_dir,
+  pattern = "[.]dta$",
+  recursive = TRUE, full.names = TRUE
+)
+length(dta_files)
+```
+
+`nesstar_compare()` compares one dataset with a data frame from a different
+source. It matches the columns by name and ignores differences in
+punctuation, for example `Srl._No.` and `Srl_No`. Refer to
+`?nesstar_compare` for the full rules.
+`haven::zap_labels()` removes the value labels from the Stata data before the
+comparison.
+
+The code reads one Stata file and one dataset at a time to limit the
+memory use.
+
+```{r compare}
+results <- data.frame()
+for (f in dta_files) {
+  s <- as.data.frame(haven::zap_labels(haven::read_dta(f)))
+  hit <- ds_tbl$dataset_number[ds_tbl$row_count == nrow(s) &
+    ds_tbl$variable_count == ncol(s)]
+  row <- data.frame(
+    stata_file = basename(f), dataset = NA_integer_,
+    rows = nrow(s), columns = ncol(s),
+    unmatched_columns = NA_integer_, different_values = NA_integer_
+  )
+  if (length(hit) == 1) {
+    cmp <- nesstar_compare(nb, dataset_number = hit, reference = s)
+    row$dataset <- hit
+    row$unmatched_columns <- sum(is.na(cmp$different_values))
+    row$different_values <- sum(cmp$different_values, na.rm = TRUE)
+  }
+  results <- rbind(results, row)
+  rm(s)
+  invisible(gc())
+}
+results[order(results$dataset), ]
+```
+
+Each Stata file must match one dataset. Each column must be in the two
+sources, and all values must be equal.
+
+```{r compare-check}
+stopifnot(
+  !anyNA(results$dataset),
+  all(results$unmatched_columns == 0),
+  all(results$different_values == 0)
+)
+```

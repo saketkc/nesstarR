@@ -13,8 +13,8 @@ nesstar_variables(x, dataset_number)
 \code{\link{nesstar_datasets}}).}
 }
 \value{
-A data frame with one row per variable describing its storage
-  properties.
+A data frame with one row for each variable. The columns give the
+  storage format of the variable.
 }
 \description{
 List variables in one dataset

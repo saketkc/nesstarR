@@ -15,3 +15,5 @@ src/*.dylib
 /Meta/
 /docs/
 /.roxygen-cache/
+
+vignettes/articles/data/

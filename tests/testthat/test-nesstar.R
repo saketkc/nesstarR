@@ -51,4 +51,31 @@ test_that("malformed input errors instead of crashing", {
   x <- nesstar_parse(example_path())
   x$datasets[[1]]$variables[[3]]$data_length <- 8
   expect_error(nesstar_read_dataset(x, 1, columns = "INCOME"), "data region")
+
+  # A column past the end of the file gives an error, not a short column.
+  x <- nesstar_parse(example_path())
+  x$datasets[[1]]$variables[[1]]$data_offset <- 1e6
+  expect_error(nesstar_read_dataset(x, 1, columns = "AGE"), "Could not read")
+})
+
+test_that("compare finds changed values and matches punctuated names", {
+  x <- nesstar_parse(example_path())
+  ref <- nesstar_read_dataset(x, 1)
+  ref$AGE <- as.character(ref$AGE)
+  ref$AGE[1] <- "025"
+  ref$NAME[2] <- " cde "
+  ref$INCOME[1] <- 1
+  names(ref)[names(ref) == "GROUP"] <- "group."
+  ref$EXTRA <- 1
+  attr(ref$INCOME, "format.stata") <- "%9.0g"
+
+  cmp <- nesstar_compare(x, 1, ref)
+  diffs <- setNames(cmp$different_values, cmp$column)
+  expect_equal(
+    diffs[c("AGE", "GROUP", "INCOME", "NAME")],
+    c(AGE = 0L, GROUP = 0L, INCOME = 1L, NAME = 0L)
+  )
+  expect_true(is.na(diffs[["EXTRA"]]))
+  expect_false(cmp$in_nesstar[cmp$column == "EXTRA"])
+  expect_error(nesstar_compare(x, 1, ref[1:2, ]), "reference has 2 rows")
 })

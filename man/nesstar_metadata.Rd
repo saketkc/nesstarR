@@ -2,7 +2,7 @@
 % Please edit documentation in R/metadata.R
 \name{nesstar_metadata}
 \alias{nesstar_metadata}
-\title{Read embedded XML metadata from a NESSTAR container}
+\title{Read the XML metadata of a Nesstar file}
 \usage{
 nesstar_metadata(x)
 }
@@ -12,21 +12,22 @@ nesstar_metadata(x)
 \value{
 A named list:
   \describe{
-    \item{\code{datasets}}{A list, one element per dataset, each containing
-      \code{dataset_number}, \code{file_name}, and \code{variables} (a list
-      of per-variable lists with \code{name}, \code{label}, and
-      \code{categories}).}
+    \item{\code{datasets}}{A list with one element for each dataset. Each
+      element contains \code{dataset_number}, \code{file_name} and
+      \code{variables}. \code{variables} is a list with one list for each
+      variable. Each variable list contains \code{name}, \code{label} and
+      \code{categories}.}
   }
-  Returns \code{NULL} (with a warning) when metadata cannot be decoded.
+  If the function cannot decode the metadata, it returns \code{NULL}.
 }
 \description{
-Decodes the Huffman-compressed XML blocks embedded in the container to
-recover dataset file names, variable labels, and categorical value labels.
+Decodes the Huffman-coded XML blocks in the file. The XML blocks contain
+the dataset file names, the variable labels and the category labels.
 }
 \details{
-If the embedded metadata blocks cannot be decoded (e.g. older NSS files
-where record IDs differ) the function returns \code{NULL} with a warning
-instead of stopping.
+Some older NSS files use different record IDs. For these files, the
+function cannot decode the metadata. It gives a warning and returns
+\code{NULL}.
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

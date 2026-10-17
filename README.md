@@ -1,10 +1,15 @@
-# nesstarR
+# nesstarR <img src="man/figures/logo.png" align="right" height="139" alt="nesstarR logo" />
 
-Reads `.Nesstar` binary containers from statistical agencies like [MOSPI India](https://mospi.gov.in/) into R data frames and exports them to CSV.
+nesstarR reads `.Nesstar` binary files into R data frames and writes them to CSV files.
+
+`.Nesstar` is the file format of Nesstar Publisher. Nesstar Publisher is survey documentation software from the [International Household Survey Network (IHSN)](https://www.ihsn.org/node/557). Statistical agencies, for example the [Ministry of Statistics and Programme Implementation (MoSPI), India](https://mospi.gov.in/), publish survey microdata in this format. nesstarR does not need Nesstar software.
 
 ## Installation
 
 ```r
+install.packages("nesstarR")
+
+# Development version
 devtools::install_github("saketkc/nesstarR")
 ```
 
@@ -15,8 +20,9 @@ library(nesstarR)
 
 x <- nesstar_parse("path/to/file.Nesstar")
 x
-#> NESSTAR container: file.Nesstar
-#> 3 dataset(s)
+#> <nesstar_binary>
+#>  File      : file.Nesstar 
+#>  Datasets  : 3
 
 nesstar_datasets(x)
 #>   dataset_number row_count variable_count
@@ -26,14 +32,14 @@ nesstar_datasets(x)
 
 nesstar_variables(x, dataset_number = 1)
 
-# Read a full dataset or just the columns you need
+# Read all columns, or only the columns that you specify
 df <- nesstar_read_dataset(x, dataset_number = 1)
 df_subset <- nesstar_read_dataset(x, dataset_number = 1, columns = c("AGE", "DISTRICT", "INCOME"))
 ```
 
 ## Metadata
 
-NESSTAR files embed Huffman-compressed XML with variable labels and category codes:
+A `.Nesstar` file contains XML blocks with variable labels and category codes. Huffman coding compresses these blocks.
 
 ```r
 meta <- nesstar_metadata(x)
@@ -44,11 +50,11 @@ ds$file_name       # original survey file name
 ds$variables[[1]]  # list(name, label, categories)
 ```
 
-Older NSS-format files lack XML blocks; `nesstar_metadata()` returns `NULL` with a warning for those.
+Some older NSS files do not contain these XML blocks. For these files, `nesstar_metadata()` gives a warning and returns `NULL`.
 
-## Exporting to CSV
+## Export to CSV
 
-`nesstar_export()` writes each dataset to its own CSV file. It reads 50,000 rows at a time by default, so large files don't blow up your memory:
+`nesstar_export()` writes each dataset to a different CSV file. By default, it reads 50,000 rows at a time. This limits the memory use for large files.
 
 ```r
 # All datasets, gzip-compressed (default)
@@ -67,22 +73,11 @@ nesstar_export(
 
 The function returns the output file paths invisibly.
 
-## Reference functions
-
-| Function | What it does |
-|---|---|
-| `nesstar_parse(path)` | Parse a `.Nesstar` file; returns a `nesstar_binary` object |
-| `nesstar_datasets(x)` | Data frame of dataset numbers, row counts, and variable counts |
-| `nesstar_variables(x, dataset_number)` | Data frame of variable names, types, and binary layout |
-| `nesstar_read_dataset(x, dataset_number, columns)` | Read one dataset into a data frame |
-| `nesstar_metadata(x)` | Decode embedded XML labels and category codes |
-| `nesstar_export(x, output_dir, ...)` | Export datasets to CSV or CSV.gz |
-
 ## Format notes
 
-Two column types appear in NESSTAR containers:
+A `.Nesstar` file has two column types:
 
-- Mode 1 (strings): fixed-width UTF-16LE fields, returned as `character`
-- Mode 5 (numerics): packed formats from 4-bit nibbles to IEEE 754 `float64`, returned as `numeric`; missing values become `NA`
+- Mode 1 (string): fixed-width UTF-16LE fields. nesstarR returns them as `character`.
+- Mode 5 (numeric): packed formats, from 4-bit values to IEEE 754 `float64`. nesstarR returns them as `numeric`. Missing values become `NA`.
 
-The parser auto-detects byte order (little-endian by default, big-endian fallback) and converts all strings to UTF-8.
+The parser finds the byte order of the file. It tries little-endian first and then big-endian. It converts all strings to UTF-8.

@@ -104,23 +104,45 @@ typedef struct {
     uint32_t   count;
 } ResIndex;
 
-static ResIndex parse_resource_index(const uint8_t *data, size_t len, int le) {
+/* The file is never held in memory. read_at() calls an R function that
+ * returns n bytes at offset off, and copies them to an R_alloc buffer that
+ * lives until the .Call returns. */
+typedef struct {
+    SEXP   fn;
+    size_t len;  /* file size */
+} Reader;
+
+static const uint8_t *read_at(const Reader *r, size_t off, size_t n, const char *what) {
+    if (off > r->len || n > r->len - off)
+        error("%s extends beyond end of file", what);
+    SEXP a    = PROTECT(ScalarReal((double)off));
+    SEXP b    = PROTECT(ScalarReal((double)n));
+    SEXP call = PROTECT(lang3(r->fn, a, b));
+    SEXP res  = PROTECT(eval(call, R_GlobalEnv));
+    if (TYPEOF(res) != RAWSXP || (size_t)XLENGTH(res) != n)
+        error("Could not read %s from the file", what);
+    uint8_t *buf = (uint8_t *)R_alloc(n ? n : 1, 1);
+    if (n) memcpy(buf, RAW(res), n);
+    UNPROTECT(4);
+    return buf;
+}
+
+static ResIndex parse_resource_index(const Reader *r, const uint8_t *hdr, int le) {
     ResIndex idx = {NULL, 0};
-    if (len < 0x2A) return idx;
     /* Offset is stored as 5-byte LE (bytes 0x25..0x29); BE files use 4-byte. */
     size_t off;
     if (le) {
-        off = (size_t)((uint64_t)u32le(data, 0x25) | ((uint64_t)data[0x29] << 32));
+        off = (size_t)((uint64_t)u32le(hdr, 0x25) | ((uint64_t)hdr[0x29] << 32));
     } else {
-        off = (size_t)u32be(data, 0x25);
+        off = (size_t)u32be(hdr, 0x25);
     }
-    if (off + 4 > len) return idx;
-    uint32_t count = read_u32(data, off, le);
+    if (off > r->len || r->len - off < 4) return idx;
+    uint32_t count = read_u32(read_at(r, off, 4, "resource index"), 0, le);
     if (count == 0 || count > MAX_RESOURCES) return idx;
-    size_t end = (size_t)off + 4 + (size_t)count * 15;
-    if (end > len) return idx;
+    if ((size_t)count * 15 > r->len - off - 4) return idx;
+    const uint8_t *data = read_at(r, off + 4, (size_t)count * 15, "resource index");
     ResRecord *recs = (ResRecord *)R_alloc(count, sizeof(ResRecord));
-    size_t cur = off + 4;
+    size_t cur = 0;
     for (uint32_t i = 0; i < count; i++) {
         recs[i].record_id     = read_u32(data, cur,    le);
         /* target_offset: 4-byte base at +4, high byte at +8 (5-byte LE u40). */
@@ -154,31 +176,32 @@ static int is_plausible_name(const char *s) {
 }
 
 /*
- * nesstar_parse_binary(raw_bytes)
- * raw_bytes: raw vector (the full file contents)
+ * nesstar_parse_binary(read_fn, file_len)
+ * read_fn : R function(offset, n) that returns n bytes of the file as raw
+ * file_len: file size in bytes
  *
  * Returns a named list:
  *   $byte_order     : character "little" or "big"
- *   $dataset_count  : integer
+ *   $resources      : list of record_id, target_offset, length (doubles)
  *   $datasets       : list of per-dataset lists:
  *     $dataset_number, $variable_count, $row_count
  *     $variables: list of per-variable lists:
  *       $name, $variable_id, $mode_code, $value_format_code,
  *       $value_offset_i64, $width_value, $data_offset, $data_length
  */
-SEXP nesstar_parse_binary(SEXP raw_bytes) {
-    if (TYPEOF(raw_bytes) != RAWSXP)
-        error("nesstar_parse_binary: expected a raw vector");
+SEXP nesstar_parse_binary(SEXP read_fn, SEXP r_file_len) {
+    if (!isFunction(read_fn))
+        error("nesstar_parse_binary: expected a function");
+    Reader rd = {read_fn, (size_t)asReal(r_file_len)};
+    size_t len = rd.len;
 
-    const uint8_t *data = RAW(raw_bytes);
-    size_t len = (size_t)XLENGTH(raw_bytes);
-
-    if (len < 0x33 || memcmp(data, "NESSTART", 8) != 0)
+    const uint8_t *data = len < 0x33 ? NULL : read_at(&rd, 0, 0x33, "header");
+    if (!data || memcmp(data, "NESSTART", 8) != 0)
         error("Not a NESSTAR file: missing NESSTART magic");
 
     int le = detect_byte_order(data, len);
 
-    ResIndex idx = parse_resource_index(data, len, le);
+    ResIndex idx = parse_resource_index(&rd, data, le);
     if (!idx.records)
         error("Could not parse trailing resource index");
 
@@ -195,18 +218,20 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
     size_t desc_off = (size_t)base_rec->target_offset;
     if (desc_off + (size_t)ds_count * rec_sz > len)
         error("Descriptor table extends beyond end of file");
+    const uint8_t *desc = read_at(&rd, desc_off, (size_t)ds_count * rec_sz,
+                                  "Descriptor table");
 
     SEXP datasets = PROTECT(allocVector(VECSXP, ds_count));
 
     for (int d = 0; d < ds_count; d++) {
-        size_t doff = (size_t)desc_off + (size_t)d * rec_sz;
-        uint32_t ds_num    = read_u32(data, doff,    le);
-        uint32_t var_count = read_u32(data, doff+4,  le);
-        uint32_t row_count = read_u32(data, doff+8,  le);
-        uint32_t row_copy  = read_u32(data, doff+12, le);
-        uint32_t fd_rec_id = read_u32(data, doff+16, le);
-        uint16_t entry_sz  = read_u16(data, doff+20, le);
-        uint32_t dir_rec_id= read_u32(data, doff+22, le);
+        size_t doff = (size_t)d * rec_sz;
+        uint32_t ds_num    = read_u32(desc, doff,    le);
+        uint32_t var_count = read_u32(desc, doff+4,  le);
+        uint32_t row_count = read_u32(desc, doff+8,  le);
+        uint32_t row_copy  = read_u32(desc, doff+12, le);
+        uint32_t fd_rec_id = read_u32(desc, doff+16, le);
+        uint16_t entry_sz  = read_u16(desc, doff+20, le);
+        uint32_t dir_rec_id= read_u32(desc, doff+22, le);
 
         if (row_copy != row_count)
             error("Dataset %u: row_count mismatch (%u vs %u)", ds_num, row_count, row_copy);
@@ -221,6 +246,8 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
         size_t dir_off = (size_t)dir_rec->target_offset;
         if (dir_off + (size_t)var_count * entry_sz > len)
             error("Dataset %u: variable directory extends beyond file", ds_num);
+        const uint8_t *dir = read_at(&rd, dir_off, (size_t)var_count * entry_sz,
+                                     "variable directory");
 
         SEXP variables = PROTECT(allocVector(VECSXP, (int)var_count));
         static const char *var_names[] = {
@@ -230,20 +257,20 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
         };
 
         for (uint32_t v = 0; v < var_count; v++) {
-            size_t voff = (size_t)dir_off + (size_t)v * entry_sz;
+            size_t voff = (size_t)v * entry_sz;
             /* Name: bytes 63..126 = 64 bytes UTF-16LE */
-            char *name = utf16le_to_utf8(data + voff + 63, 64);
+            char *name = utf16le_to_utf8(dir + voff + 63, 64);
             if (!is_plausible_name(name))
                 error("Dataset %u variable %u: implausible name '%s'", ds_num, v, name);
 
-            uint32_t var_id     = u32le(data, voff + 15);
-            uint8_t  mode       = u8(data,    voff + 159);
-            uint8_t  fmt        = u8(data,    voff + 5);
-            int64_t  offset_i64 = i64le(data, voff + 6);
-            uint8_t  width      = u8(data,    voff + 149);
-            uint32_t lbl_rec_id = u32le(data, voff + 127);
-            uint16_t cat_rec_id = u16le(data, voff + 131);
-            uint32_t obj_id     = u32le(data, voff + 155);
+            uint32_t var_id     = u32le(dir, voff + 15);
+            uint8_t  mode       = u8(dir,    voff + 159);
+            uint8_t  fmt        = u8(dir,    voff + 5);
+            int64_t  offset_i64 = i64le(dir, voff + 6);
+            uint8_t  width      = u8(dir,    voff + 149);
+            uint32_t lbl_rec_id = u32le(dir, voff + 127);
+            uint16_t cat_rec_id = u16le(dir, voff + 131);
+            uint32_t obj_id     = u32le(dir, voff + 155);
 
             /* Look up data offset/length in resource index */
             ResRecord *var_rec = find_record(&idx, var_id);
@@ -280,12 +307,24 @@ SEXP nesstar_parse_binary(SEXP raw_bytes) {
         UNPROTECT(2); /* variables, ds_list */
     }
 
-    static const char *top_names[] = {"byte_order","datasets",""};
+    static const char *res_names[] = {"record_id","target_offset","length",""};
+    SEXP resources = PROTECT(mkNamed(VECSXP, res_names));
+    SEXP rid = allocVector(REALSXP, idx.count); SET_VECTOR_ELT(resources, 0, rid);
+    SEXP tgt = allocVector(REALSXP, idx.count); SET_VECTOR_ELT(resources, 1, tgt);
+    SEXP rln = allocVector(REALSXP, idx.count); SET_VECTOR_ELT(resources, 2, rln);
+    for (uint32_t i = 0; i < idx.count; i++) {
+        REAL(rid)[i] = (double)idx.records[i].record_id;
+        REAL(tgt)[i] = (double)idx.records[i].target_offset;
+        REAL(rln)[i] = (double)idx.records[i].length;
+    }
+
+    static const char *top_names[] = {"byte_order","resources","datasets",""};
     SEXP result = PROTECT(mkNamed(VECSXP, top_names));
     SET_VECTOR_ELT(result, 0, mkString(le ? "little" : "big"));
-    SET_VECTOR_ELT(result, 1, datasets);
+    SET_VECTOR_ELT(result, 1, resources);
+    SET_VECTOR_ELT(result, 2, datasets);
 
-    UNPROTECT(2); /* datasets, result */
+    UNPROTECT(3); /* datasets, resources, result */
     return result;
 }
 
@@ -346,24 +385,15 @@ static HeapItem heap_pop(void) {
 }
 
 /*
- * nesstar_decode_huffman(raw_bytes, offset, has_dataset_index)
- * Decodes one Huffman-compressed XML block.
+ * nesstar_decode_huffman(raw_bytes)
+ * Decodes one Huffman-compressed XML block. raw_bytes holds only the block.
  * Returns a character scalar (the decoded XML string).
  */
-SEXP nesstar_decode_huffman(SEXP raw_bytes, SEXP r_offset, SEXP r_has_ds_idx) {
+SEXP nesstar_decode_huffman(SEXP raw_bytes) {
     if (TYPEOF(raw_bytes) != RAWSXP) error("expected raw vector");
     const uint8_t *data = RAW(raw_bytes);
-    size_t len  = (size_t)XLENGTH(raw_bytes);
-    size_t base = (size_t)asInteger(r_offset);
-    int has_ds  = asLogical(r_has_ds_idx);
-
-    if (base >= len) error("offset %zu beyond file length %zu", base, len);
-
-    size_t pos = base;
-    if (has_ds) {
-        if (pos >= len) error("truncated: no dataset-index byte");
-        pos++; /* skip dataset-index byte (not used in output) */
-    }
+    size_t len = (size_t)XLENGTH(raw_bytes);
+    size_t pos = 0;
 
     if (pos >= len) error("truncated: no symbol_count");
     int sym_count = (int)data[pos++];
@@ -564,45 +594,59 @@ static SEXP decode_column_impl(const uint8_t *col, size_t col_len, int mode, int
     return out;
 }
 
-SEXP nesstar_decode_column(SEXP raw_bytes, SEXP r_data_offset, SEXP r_data_len,
-                           SEXP r_mode, SEXP r_fmt, SEXP r_offset_i64,
-                           SEXP r_width, SEXP r_row_count) {
-    const uint8_t *data = RAW(raw_bytes);
-    size_t file_len = (size_t)XLENGTH(raw_bytes);
-    size_t col_off  = (size_t)asReal(r_data_offset);
-    size_t col_len  = (size_t)asReal(r_data_len);
-    if (col_off + col_len > file_len)
-        error("column data region [%zu, %zu) exceeds file length %zu",
-              col_off, col_off + col_len, file_len);
-    return decode_column_impl(data + col_off, col_len,
-                              asInteger(r_mode), asInteger(r_fmt),
-                              asReal(r_offset_i64), asInteger(r_width),
-                              0, asInteger(r_row_count));
-}
-
-SEXP nesstar_decode_column_range(SEXP raw_bytes, SEXP r_data_offset, SEXP r_data_len,
+/*
+ * nesstar_decode_column_range(read_fn, data_offset, data_length, mode, fmt,
+ *                             offset_i64, width, total_rows, row_start, n_rows)
+ * Reads only the bytes of rows [row_start, row_start + n_rows) through
+ * read_fn and decodes them.
+ */
+SEXP nesstar_decode_column_range(SEXP read_fn, SEXP r_data_offset, SEXP r_data_len,
                                  SEXP r_mode, SEXP r_fmt, SEXP r_offset_i64,
-                                 SEXP r_width, SEXP r_row_start, SEXP r_n_rows) {
-    const uint8_t *data = RAW(raw_bytes);
-    size_t file_len = (size_t)XLENGTH(raw_bytes);
-    size_t col_off  = (size_t)asReal(r_data_offset);
-    size_t col_len  = (size_t)asReal(r_data_len);
-    if (col_off + col_len > file_len)
-        error("column data region [%zu, %zu) exceeds file length %zu",
-              col_off, col_off + col_len, file_len);
-    return decode_column_impl(data + col_off, col_len,
-                              asInteger(r_mode), asInteger(r_fmt),
-                              asReal(r_offset_i64), asInteger(r_width),
-                              asInteger(r_row_start), asInteger(r_n_rows));
+                                 SEXP r_width, SEXP r_total_rows,
+                                 SEXP r_row_start, SEXP r_n_rows) {
+    size_t col_off = (size_t)asReal(r_data_offset);
+    size_t col_len = (size_t)asReal(r_data_len);
+    int mode = asInteger(r_mode), fmt = asInteger(r_fmt), width = asInteger(r_width);
+    int row_start = asInteger(r_row_start), n_rows = asInteger(r_n_rows);
+    if (row_start < 0 || n_rows < 0) error("negative row range");
+    int nibble = fmt == FMT_NIBBLE;
+
+    /* Older NSS files write mode 0 for numeric and string columns. The
+     * column is numeric if its length is the numeric size of all rows. */
+    if (mode == 0) {
+        size_t total = (size_t)asInteger(r_total_rows);
+        size_t num = nibble ? (total + 1) / 2 : total * bytes_per_row(MODE_NUMERIC, fmt, 0);
+        mode = col_len == num ? MODE_NUMERIC : MODE_STRING;
+    }
+
+    size_t first, n_bytes;
+    int local_start = 0;
+    if (mode == MODE_NUMERIC && nibble) {
+        /* two rows in each byte: start at the byte of the first row */
+        first = (size_t)row_start / 2;
+        n_bytes = ((size_t)row_start + n_rows + 1) / 2 - first;
+        local_start = row_start % 2;
+    } else {
+        size_t bpr = bytes_per_row(mode, fmt, width);
+        first = (size_t)row_start * bpr;
+        n_bytes = (size_t)n_rows * bpr;
+    }
+    /* never read past the column; decode_column_impl rejects a short one */
+    if (first > col_len) first = col_len;
+    if (n_bytes > col_len - first) n_bytes = col_len - first;
+
+    Reader rd = {read_fn, col_off + col_len};
+    const uint8_t *col = read_at(&rd, col_off + first, n_bytes, "column data");
+    return decode_column_impl(col, n_bytes, mode, fmt, asReal(r_offset_i64),
+                              width, local_start, n_rows);
 }
 
 /* R registration table */
 
 static const R_CallMethodDef CallEntries[] = {
-    {"nesstar_parse_binary",       (DL_FUNC)&nesstar_parse_binary,       1},
-    {"nesstar_decode_huffman",     (DL_FUNC)&nesstar_decode_huffman,     3},
-    {"nesstar_decode_column",      (DL_FUNC)&nesstar_decode_column,      8},
-    {"nesstar_decode_column_range",(DL_FUNC)&nesstar_decode_column_range,9},
+    {"nesstar_parse_binary",       (DL_FUNC)&nesstar_parse_binary,       2},
+    {"nesstar_decode_huffman",     (DL_FUNC)&nesstar_decode_huffman,     1},
+    {"nesstar_decode_column_range",(DL_FUNC)&nesstar_decode_column_range,10},
     {NULL, NULL, 0}
 };
 

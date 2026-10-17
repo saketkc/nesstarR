@@ -2,7 +2,7 @@
 % Please edit documentation in R/nesstar.R
 \name{nesstar_export}
 \alias{nesstar_export}
-\title{Export all datasets to CSV files}
+\title{Export datasets to CSV files}
 \usage{
 nesstar_export(
   x,
@@ -15,24 +15,24 @@ nesstar_export(
 \arguments{
 \item{x}{A \code{nesstar_binary} object.}
 
-\item{output_dir}{Directory to write files into.  Created if it does not
-exist.}
+\item{output_dir}{Directory for the output files. If the directory does
+not exist, the function makes it.}
 
-\item{datasets}{Integer vector of dataset numbers to export.  When
-\code{NULL} (default) every dataset is exported.}
+\item{datasets}{Integer vector of the dataset numbers to export. If
+\code{NULL} (the default), the function exports all datasets.}
 
-\item{compress}{Logical; when \code{TRUE} (default) output files are
-gzip-compressed (\code{.csv.gz}).}
+\item{compress}{Logical. If \code{TRUE} (the default), the function writes
+gzip files (\code{.csv.gz}).}
 
-\item{chunk_size}{Number of rows to process per iteration (reduces peak
-memory use).}
+\item{chunk_size}{Number of rows to read at a time. A smaller value
+decreases the memory use.}
 }
 \value{
 Invisibly, a character vector of output file paths.
 }
 \description{
-Writes each dataset to a CSV file named after the container and dataset
-number.
+Writes each dataset to a different CSV file. The file name contains the
+name of the Nesstar file and the dataset number.
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

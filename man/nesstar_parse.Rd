@@ -2,7 +2,7 @@
 % Please edit documentation in R/nesstar.R
 \name{nesstar_parse}
 \alias{nesstar_parse}
-\title{Parse a NESSTAR binary container}
+\title{Parse a Nesstar file}
 \usage{
 nesstar_parse(path)
 }
@@ -13,8 +13,14 @@ nesstar_parse(path)
 A \code{nesstar_binary} list (S3 class).
 }
 \description{
-Reads the file into memory and parses the binary layout (resource index,
-dataset descriptors, variable directories).
+Decodes the resource index, the dataset descriptors and the variable
+directories. Does not decode row data.
+}
+\details{
+The function does not keep the file in memory. The other functions read
+only the bytes that they need from the file. Thus, the memory use does not
+increase with the file size. Do not move or change the file while you use
+the result.
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

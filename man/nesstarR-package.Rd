@@ -4,15 +4,17 @@
 \name{nesstarR-package}
 \alias{nesstarR}
 \alias{nesstarR-package}
-\title{nesstarR: Read and Export 'NESSTAR' Binary Containers}
+\title{nesstarR: Read and Export 'Nesstar' Binary Files}
 \description{
-Reads '.Nesstar' binary containers produced by the 'NESSTAR' Publisher software and distributed by statistical agencies such as the Ministry of Statistics and Programme Implementation (MoSPI), India. Decodes packed numeric and fixed-width string columns into data frames, recovers embedded variable labels and category codes, and exports datasets to CSV in memory-bounded chunks.
+\if{html}{\figure{logo.png}{options: style='float: right' alt='logo' width='120'}}
+
+Reads '.Nesstar' binary files into data frames. '.Nesstar' is the file format of 'Nesstar Publisher', survey documentation software from the International Household Survey Network \url{https://www.ihsn.org/node/557}. Statistical agencies, for example the Ministry of Statistics and Programme Implementation ('MoSPI', India), publish survey microdata in this format. The package decodes packed numeric columns and fixed-width string columns, extracts variable labels and category codes, and writes datasets to CSV files in chunks to limit memory use.
 }
 \seealso{
 Useful links:
 \itemize{
+  \item \url{https://nesstarr.saketlab.org}
   \item \url{https://github.com/saketkc/nesstarR}
-  \item \url{https://saket-choudhary.me/nesstarR/}
   \item Report bugs at \url{https://github.com/saketkc/nesstarR/issues}
 }
 

@@ -1,21 +1,22 @@
-#' Read embedded XML metadata from a NESSTAR container
+#' Read the XML metadata of a Nesstar file
 #'
-#' Decodes the Huffman-compressed XML blocks embedded in the container to
-#' recover dataset file names, variable labels, and categorical value labels.
+#' Decodes the Huffman-coded XML blocks in the file. The XML blocks contain
+#' the dataset file names, the variable labels and the category labels.
 #'
-#' If the embedded metadata blocks cannot be decoded (e.g. older NSS files
-#' where record IDs differ) the function returns \code{NULL} with a warning
-#' instead of stopping.
+#' Some older NSS files use different record IDs. For these files, the
+#' function cannot decode the metadata. It gives a warning and returns
+#' \code{NULL}.
 #'
 #' @param x A \code{nesstar_binary} object from \code{\link{nesstar_parse}}.
 #' @return A named list:
 #'   \describe{
-#'     \item{\code{datasets}}{A list, one element per dataset, each containing
-#'       \code{dataset_number}, \code{file_name}, and \code{variables} (a list
-#'       of per-variable lists with \code{name}, \code{label}, and
-#'       \code{categories}).}
+#'     \item{\code{datasets}}{A list with one element for each dataset. Each
+#'       element contains \code{dataset_number}, \code{file_name} and
+#'       \code{variables}. \code{variables} is a list with one list for each
+#'       variable. Each variable list contains \code{name}, \code{label} and
+#'       \code{categories}.}
 #'   }
-#'   Returns \code{NULL} (with a warning) when metadata cannot be decoded.
+#'   If the function cannot decode the metadata, it returns \code{NULL}.
 #' @examples
 #' path <- system.file("extdata", "example.Nesstar", package = "nesstarR")
 #' x <- nesstar_parse(path)
@@ -25,12 +26,14 @@
 nesstar_metadata <- function(x) {
   stopifnot(inherits(x, "nesstar_binary"))
 
-  idx <- .build_resource_index(x$raw)
+  res <- x$resources
+  record <- function(id) {
+    i <- match(id, res$record_id)
+    if (is.na(i)) NULL else list(target_offset = res$target_offset[i], length = res$length[i])
+  }
 
   # Records 1 and 2 are the top-level DocDesc / StudyDesc blocks (modern files)
-  rec1 <- idx[[as.character(1L)]]
-  rec2 <- idx[[as.character(2L)]]
-  if (is.null(rec1) || is.null(rec2)) {
+  if (is.null(record(1)) || is.null(record(2))) {
     warning(
       "Embedded metadata record ids 1 and 2 not found; ",
       "this file uses an older format. Labels are unavailable."
@@ -43,10 +46,10 @@ nesstar_metadata <- function(x) {
   for (i in seq_along(x$datasets)) {
     ds <- x$datasets[[i]]
 
-    fd_rec <- idx[[as.character(ds$file_description_record_id)]]
+    fd_rec <- record(ds$file_description_record_id)
     file_name <- if (!is.null(fd_rec)) {
       xml_text <- tryCatch(
-        .decode_huffman_block(x$raw, fd_rec$target_offset, has_ds_idx = FALSE),
+        .decode_huffman_block(x$path, fd_rec),
         error = function(e) NULL
       )
       if (!is.null(xml_text)) .xml_file_name(xml_text) else NULL
@@ -59,17 +62,17 @@ nesstar_metadata <- function(x) {
       v <- ds$variables[[j]]
 
       label <- ""
-      lbl_rec <- idx[[as.character(v$label_resource_id)]]
+      lbl_rec <- record(v$label_resource_id)
       if (!is.null(lbl_rec) && lbl_rec$length > 0) {
-        raw_label <- x$raw[(lbl_rec$target_offset + 1L):(lbl_rec$target_offset + lbl_rec$length)]
+        raw_label <- .read_bytes(x$path, lbl_rec$target_offset, lbl_rec$length)
         label <- trimws(rawToChar(raw_label))
       }
 
       categories <- list()
-      cat_rec <- idx[[as.character(v$category_resource_id)]]
+      cat_rec <- record(v$category_resource_id)
       if (!is.null(cat_rec) && cat_rec$length > 0) {
         xml_text <- tryCatch(
-          .decode_huffman_block(x$raw, cat_rec$target_offset, has_ds_idx = FALSE),
+          .decode_huffman_block(x$path, cat_rec),
           error = function(e) NULL
         )
         if (!is.null(xml_text)) {
@@ -94,38 +97,9 @@ nesstar_metadata <- function(x) {
   list(datasets = result_datasets)
 }
 
-.build_resource_index <- function(raw) {
-  # Detect byte order: LE offset at 0x25 valid?
-  le_off <- .u32le(raw, 0x26L) # R is 1-based; byte 0x25 = index 38
-  be_off <- .u32be(raw, 0x26L)
-  file_len <- length(raw)
-  le <- le_off + 4L <= file_len
-
-  idx_off <- if (le) le_off else be_off
-  count <- if (le) .u32le(raw, idx_off + 1L) else .u32be(raw, idx_off + 1L)
-
-  result <- vector("list", count)
-  pos <- idx_off + 4L + 1L # 1-based
-  for (i in seq_len(count)) {
-    rid <- if (le) .u32le(raw, pos) else .u32be(raw, pos)
-    tgt <- if (le) .u32le(raw, pos + 4L) else .u32be(raw, pos + 4L)
-    length <- if (le) .u32le(raw, pos + 10L) else .u32be(raw, pos + 10L)
-    result[[i]] <- list(record_id = rid, target_offset = tgt, length = length)
-    pos <- pos + 15L
-  }
-
-  named <- list()
-  for (r in result) named[[as.character(r$record_id)]] <- r
-  named
-}
-
-.decode_huffman_block <- function(raw, target_offset, has_ds_idx = FALSE) {
-  # target_offset is 0-based; convert to 1-based R index
-  .Call(
-    "nesstar_decode_huffman", raw,
-    as.integer(target_offset),
-    as.logical(has_ds_idx)
-  )
+# The resource record gives the length of the block, so only the block is read.
+.decode_huffman_block <- function(path, rec) {
+  .Call("nesstar_decode_huffman", .read_bytes(path, rec$target_offset, rec$length))
 }
 
 .xml_file_name <- function(xml_text) {
@@ -153,20 +127,6 @@ nesstar_metadata <- function(x) {
     cats[[i]] <- list(value = val, label = lbl)
   }
   cats
-}
-
-.u32le <- function(raw, off) {
-  as.integer(raw[off]) +
-    as.integer(raw[off + 1L]) * 256L +
-    as.integer(raw[off + 2L]) * 65536L +
-    bitwShiftL(as.integer(raw[off + 3L]), 24L)
-}
-
-.u32be <- function(raw, off) {
-  bitwShiftL(as.integer(raw[off]), 24L) +
-    as.integer(raw[off + 1L]) * 65536L +
-    as.integer(raw[off + 2L]) * 256L +
-    as.integer(raw[off + 3L])
 }
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
