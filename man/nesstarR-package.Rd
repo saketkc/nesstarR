@@ -8,7 +8,7 @@
 \description{
 \if{html}{\figure{logo.png}{options: style='float: right' alt='logo' width='120'}}
 
-Reads '.Nesstar' binary files into data frames. '.Nesstar' is the file format of 'Nesstar Publisher', survey documentation software from the International Household Survey Network \url{https://www.ihsn.org/node/557}. Statistical agencies, for example the Ministry of Statistics and Programme Implementation ('MoSPI', India), publish survey microdata in this format. The package decodes packed numeric columns and fixed-width string columns, extracts variable labels and category codes, and writes datasets to CSV files in chunks to limit memory use.
+Reads '.Nesstar' binary files into data frames. '.Nesstar' is the file format of 'Nesstar Publisher', survey documentation software from the International Household Survey Network \url{https://www.ihsn.org/node/557}. Statistical agencies, for example the Ministry of Statistics and Programme Implementation ('MoSPI', India), publish survey microdata in this format.
 }
 \seealso{
 Useful links:
@@ -20,11 +20,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Saket Choudhary \email{saketkc@gmail.com} (\href{https://orcid.org/0000-0001-5202-7633}{ORCID}) [copyright holder]
+\strong{Maintainer}: Saket Choudhary \email{saketc@iitb.ac.in} (\href{https://orcid.org/0000-0001-5202-7633}{ORCID}) [copyright holder]
 
 Authors:
 \itemize{
-  \item Saket Choudhary \email{saketkc@gmail.com} (\href{https://orcid.org/0000-0001-5202-7633}{ORCID}) [copyright holder]
+  \item Saket Choudhary \email{saketc@iitb.ac.in} (\href{https://orcid.org/0000-0001-5202-7633}{ORCID}) [copyright holder]
 }
 
 }
