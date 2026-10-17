@@ -69,17 +69,16 @@ for (f in c(
 
 ## Extract the archive
 
-`archive::archive_extract()` extracts `.rar` archives on all platforms.
+`mospiR::extract_archive()` extracts the archive with the archive package.
 The archive contains the `.Nesstar` file, a DDI XML file and documents.
+
+On Linux with libarchive before 3.7.4, `extract_archive()` needs the
+command line tool [unar](https://theunarchiver.com/command-line)
+(`sudo apt-get install unar` on Ubuntu). Refer to `?mospiR::extract_archive`.
 
 ```{r extract}
 nesstar_dir <- file.path(data_dir, "nesstar")
-if (!dir.exists(nesstar_dir)) {
-  archive::archive_extract(
-    file.path(data_dir, "Nss68_1.0_Type2_new format.rar"),
-    dir = nesstar_dir
-  )
-}
+if (!dir.exists(nesstar_dir)) mospiR::extract_archive(rar_file, nesstar_dir)
 nesstar_path <- list.files(nesstar_dir,
   pattern = "[.]Nesstar$",
   recursive = TRUE, full.names = TRUE
@@ -198,7 +197,7 @@ and columns.
 
 ```{r stata-unzip}
 stata_dir <- file.path(data_dir, "stata")
-if (!dir.exists(stata_dir)) unzip(stata_zip, exdir = stata_dir)
+if (!dir.exists(stata_dir)) mospiR::extract_archive(stata_zip, stata_dir)
 dta_files <- list.files(stata_dir,
   pattern = "[.]dta$",
   recursive = TRUE, full.names = TRUE

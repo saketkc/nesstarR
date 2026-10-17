@@ -20,6 +20,7 @@ jobs:
       MOSPI_KEY: ${{ secrets.MOSPI_KEY }}
       # nginx maps <pkg>.saketlab.org to /var/www/r-pkgdown/<pkg>, lowercase
       SITE_DIR: /var/www/r-pkgdown/nesstarr
+      DATA_DIR: vignettes/articles/data/DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012
 
     steps:
       - uses: actions/checkout@v4
@@ -39,9 +40,14 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            vignettes/articles/data/DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012/*.rar
-            vignettes/articles/data/DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012/*.zip
+            ${{ env.DATA_DIR }}/*.rar
+            ${{ env.DATA_DIR }}/*.zip
           key: nss68-DDI-IND-MOSPI-NSSO-68Rnd-Sch2.0-July2011-June2012
+          enableCrossOsArchive: true
+
+      # libarchive 3.7.2 here fails on the NSS 68 .rar; extract_archive falls back to unar
+      - name: Install unar
+        run: sudo apt-get install -y unar
 
       # pkgdown renders every top-level .md as a public page; agent notes are internal
       - name: Build pkgdown site
