@@ -18,8 +18,9 @@ nesstar_read_dataset(x, dataset_number, columns = NULL)
 A \code{data.frame}.
 }
 \description{
-Numeric columns (mode 5) become \code{numeric}. String columns (mode 1)
-become \code{character}. Missing values become \code{NA}.
+Numeric columns become \code{numeric} and string columns become
+\code{character}. Older files can mark numeric columns as strings (mode 0 or
+1); these are detected from their data size. Missing values become \code{NA}.
 }
 \examples{
 path <- system.file("extdata", "example.Nesstar", package = "nesstarR")

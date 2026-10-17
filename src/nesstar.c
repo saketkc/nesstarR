@@ -475,29 +475,29 @@ SEXP nesstar_decode_huffman(SEXP raw_bytes) {
 
 /* ---------------------------------- decode one dataset column to R vector */
 
-/* Shared inner decoder: col points to the start of the column payload,
- * row_start is the first row index to emit, n_rows is the count to emit. */
-static size_t bytes_per_row(int mode, int fmt, int width) {
-    if (mode == MODE_STRING) return (size_t)width;
+/* size of the first rows of a column */
+static size_t column_bytes(int mode, int fmt, int width, size_t rows) {
+    if (mode == MODE_STRING) return rows * (size_t)width;
     switch (fmt) {
-        case FMT_BYTE:    return 1;
-        case FMT_UINT16:  return 2;
-        case FMT_UINT24:  return 3;
-        case FMT_UINT32:  return 4;
-        case FMT_UINT40:  return 5;
-        case FMT_FLOAT64: return 8;
-        default:          return 0; /* nibble handled by caller */
+        case FMT_NIBBLE:  return (rows + 1) / 2;
+        case FMT_BYTE:    return rows;
+        case FMT_UINT16:  return rows * 2;
+        case FMT_UINT24:  return rows * 3;
+        case FMT_UINT32:  return rows * 4;
+        case FMT_UINT40:  return rows * 5;
+        case FMT_FLOAT64: return rows * 8;
+        default:          return 0;
     }
 }
 
+/* Inner decoder: col points to the start of the column payload,
+ * row_start is the first row index to emit, n_rows is the count to emit. */
 static SEXP decode_column_impl(const uint8_t *col, size_t col_len, int mode, int fmt,
                                 double off_i64, int width,
                                 int row_start, int n_rows) {
     if (row_start < 0 || n_rows < 0) error("negative row range");
     size_t end_row = (size_t)row_start + (size_t)n_rows;
-    size_t need = (mode == MODE_NUMERIC && fmt == FMT_NIBBLE)
-        ? (end_row + 1) / 2
-        : end_row * bytes_per_row(mode, fmt, width);
+    size_t need = column_bytes(mode, fmt, width, end_row);
     if (need > col_len)
         error("column needs %zu bytes but its data region holds %zu", need, col_len);
 
@@ -609,28 +609,28 @@ SEXP nesstar_decode_column_range(SEXP read_fn, SEXP r_data_offset, SEXP r_data_l
     int mode = asInteger(r_mode), fmt = asInteger(r_fmt), width = asInteger(r_width);
     int row_start = asInteger(r_row_start), n_rows = asInteger(r_n_rows);
     if (row_start < 0 || n_rows < 0) error("negative row range");
-    int nibble = fmt == FMT_NIBBLE;
 
-    /* Older NSS files write mode 0 for numeric and string columns. The
-     * column is numeric if its length is the numeric size of all rows. */
-    if (mode == 0) {
+    /* older NSS files: numbers as mode 0 or 1, regions padded to k * (2n + 100), wrong widths */
+    if (mode == 0 || mode == MODE_STRING) {
         size_t total = (size_t)asInteger(r_total_rows);
-        size_t num = nibble ? (total + 1) / 2 : total * bytes_per_row(MODE_NUMERIC, fmt, 0);
-        mode = col_len == num ? MODE_NUMERIC : MODE_STRING;
+        size_t num = column_bytes(MODE_NUMERIC, fmt, 0, total);
+        size_t text = column_bytes(MODE_STRING, fmt, width, total);
+        size_t padded = 2 * total + 100;
+        int numeric = num > 0 && col_len == num && (mode == 0 || text > col_len);
+        mode = numeric ? MODE_NUMERIC : MODE_STRING;
+        if (!numeric && col_len != text && col_len % padded == 0) {
+            /* k <= UINT32_MAX / 100: data_length is 32-bit */
+            size_t k = col_len / padded;
+            if (fmt == FMT_FLOAT64 && k == 8) mode = MODE_NUMERIC;
+            else width = (int)k;
+        }
     }
 
-    size_t first, n_bytes;
-    int local_start = 0;
-    if (mode == MODE_NUMERIC && nibble) {
-        /* two rows in each byte: start at the byte of the first row */
-        first = (size_t)row_start / 2;
-        n_bytes = ((size_t)row_start + n_rows + 1) / 2 - first;
-        local_start = row_start % 2;
-    } else {
-        size_t bpr = bytes_per_row(mode, fmt, width);
-        first = (size_t)row_start * bpr;
-        n_bytes = (size_t)n_rows * bpr;
-    }
+    /* two rows in each byte: start at the byte of the first row */
+    int nibble = mode == MODE_NUMERIC && fmt == FMT_NIBBLE;
+    size_t first = nibble ? (size_t)row_start / 2 : column_bytes(mode, fmt, width, row_start);
+    size_t n_bytes = column_bytes(mode, fmt, width, (size_t)row_start + n_rows) - first;
+    int local_start = nibble ? row_start % 2 : 0;
     /* never read past the column; decode_column_impl rejects a short one */
     if (first > col_len) first = col_len;
     if (n_bytes > col_len - first) n_bytes = col_len - first;

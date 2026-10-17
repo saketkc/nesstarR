@@ -1,5 +1,3 @@
-example_path <- function() system.file("extdata", "example.Nesstar", package = "nesstarR")
-
 test_that("parse reports datasets and variables", {
   x <- nesstar_parse(example_path())
   expect_s3_class(x, "nesstar_binary")
@@ -49,12 +47,12 @@ test_that("malformed input errors instead of crashing", {
 
   # Truncate column data: decoder must refuse rather than read out of bounds.
   x <- nesstar_parse(example_path())
-  x$datasets[[1]]$variables[[3]]$data_length <- 8
+  x <- set_var(x, "INCOME", data_length = 8)
   expect_error(nesstar_read_dataset(x, 1, columns = "INCOME"), "data region")
 
   # A column past the end of the file gives an error, not a short column.
   x <- nesstar_parse(example_path())
-  x$datasets[[1]]$variables[[1]]$data_offset <- 1e6
+  x <- set_var(x, "AGE", data_offset = 1e6)
   expect_error(nesstar_read_dataset(x, 1, columns = "AGE"), "Could not read")
 })
 

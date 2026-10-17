@@ -97,8 +97,9 @@ nesstar_variables <- function(x, dataset_number) {
 
 #' Read one dataset into an R data frame
 #'
-#' Numeric columns (mode 5) become \code{numeric}. String columns (mode 1)
-#' become \code{character}. Missing values become \code{NA}.
+#' Numeric columns become \code{numeric} and string columns become
+#' \code{character}. Older files can mark numeric columns as strings (mode 0 or
+#' 1); these are detected from their data size. Missing values become \code{NA}.
 #'
 #' @param x A \code{nesstar_binary} object.
 #' @param dataset_number Integer dataset number.
@@ -226,7 +227,7 @@ nesstar_export <- function(x, output_dir, datasets = NULL,
 
 # Decode rows row_start to row_start + n_rows - 1 (0-based) of each variable.
 # The C decoder reads only the bytes of these rows. total_nrow is needed to
-# resolve mode_code=0 variables.
+# resolve mode_code 0 and 1 variables.
 .decode_columns <- function(path, vars, total_nrow,
                             row_start = 0L, n_rows = total_nrow) {
   read <- function(offset, n) .read_bytes(path, offset, n)
