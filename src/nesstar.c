@@ -617,6 +617,10 @@ SEXP nesstar_decode_column_range(SEXP read_fn, SEXP r_data_offset, SEXP r_data_l
         size_t text = column_bytes(MODE_STRING, fmt, width, total);
         size_t padded = 2 * total + 100;
         int numeric = num > 0 && col_len == num && (mode == 0 || text > col_len);
+        /* float64 regions can hold k * 8 bytes per row (NSS 68th Type 1
+         * Combined_multiplier: k = 2); the values are the first 8 * rows */
+        if (!numeric && mode == 0 && fmt == FMT_FLOAT64 && num > 0 &&
+            col_len != text && col_len % num == 0) numeric = 1;
         mode = numeric ? MODE_NUMERIC : MODE_STRING;
         if (!numeric && col_len != text && col_len % padded == 0) {
             /* k <= UINT32_MAX / 100: data_length is 32-bit */

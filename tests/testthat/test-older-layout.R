@@ -19,6 +19,13 @@ test_that("a mode-0 float64 column with a blocked data region decodes the first 
   expect_equal(nesstar_read_dataset(x, 1)$INCOME, c(1500.5, NA, 0, 2e6))
 })
 
+test_that("a mode-0 float64 column with 2 * 8 bytes per row decodes the first n doubles", {
+  x <- nesstar_parse(example_path())
+  # NSS 68th Type 1 Combined_multiplier: 16 bytes per row, declared width 9
+  x <- set_var(x, "INCOME", mode_code = 0L, width_value = 9L, data_length = 2 * 8 * 4)
+  expect_equal(nesstar_read_dataset(x, 1)$INCOME, c(1500.5, NA, 0, 2e6))
+})
+
 test_that("a text column with a wrong width and a blocked data region uses the true width", {
   x <- nesstar_parse(example_path())
   # stored width 4, declared 10, like 52nd-round STATE
